@@ -1,7 +1,7 @@
 {
   "name": "nk-publish-gate",
   "description": "Privacy and secret gate to run before anything goes public \u2014 a repo, a release zip, a demo folder, a PDF.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": {
     "name": "Nick Lian",
     "url": "https://github.com/NickkkLian"
