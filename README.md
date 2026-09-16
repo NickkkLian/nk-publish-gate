@@ -93,7 +93,7 @@ git clone https://github.com/NickkkLian/nk-publish-gate.git ~/.agents/skills/nk-
 | OpenAI Codex CLI (0.154.0-alpha.6.2, gpt-5.6-sol, low reasoning, macOS) | yes | Copied into `~/.agents/skills` of a temporary home (the folder route 4 clones into), in a fresh project, without the user's Codex config. From a plain request that never names the skill, Codex read SKILL.md, ran the gate's self-test, scanned the folder with `scripts/publish_gate.py` and answered red with the three blocking hits: a key-shaped value, the .env file and a local absolute path. |
 | Cursor, Gemini CLI | no | Not tested. Their documentation says both read `~/.agents/skills`, the folder route 4 clones into; Gemini CLI asks before it activates a skill. |
 
-In the nine Codex runs that used the temporary home, every call into the skill folder's scripts/ used that folder's absolute path. Route 4 was checked separately: all ten repositories cloned from GitHub into a temporary home's `~/.agents/skills` were listed by the step 3 command. These skills' frontmatter uses only name, description, license and metadata.
+In this skill's Codex run, every call into the skill folder's scripts/ used that folder's absolute path. Route 4 was checked for this repository: cloned from GitHub into a temporary home's `~/.agents/skills`, it was listed by the step 3 command. This skill's frontmatter uses only name, description, license and metadata.
 
 ## Verify
 
