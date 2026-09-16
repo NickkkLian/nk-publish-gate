@@ -11,6 +11,8 @@ metadata:
 **Publishing a folder publishes every byte in it, including the ones you cannot see: archive members, PDF
 streams, cache files, and every commit in the history.** This gate looks at those bytes before you push.
 
+> **Paths.** Commands in this skill start with `${…SKILL_DIR}`: this skill's own folder, the one that contains this SKILL.md. Claude Code fills it in. If your agent shows the placeholder as written (Codex, Cursor, Gemini CLI and others), replace it with that folder's absolute path before you run the command. Left as it is, it expands to nothing and the path breaks.
+
 ## When this applies
 
 - A `git push` to a public remote, or flipping a repository from private to public.
