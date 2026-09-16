@@ -96,6 +96,8 @@ class Result:
         self.n_files = self.n_text = self.n_bytes = self.n_members = self.n_pdf = 0
 
     def hit(self, rule, label, where, line_no, line_text, matched, tier="RED"):
+        """An allow entry downgrades a hit only when its regex matches within ±24 characters of the match itself —
+        never the whole line, so a line that mixes an allowed word with a secret keeps the secret RED."""
         shown = matched[:6] + "…" + f"({len(matched)} chars)" if rule in MASK_RULES else matched
         excerpt = line_text.strip()
         if len(excerpt) > 160:
@@ -106,8 +108,10 @@ class Result:
         if tier == "NOTE":
             self.note.append(rec); return
         base = where.split("::")[0].replace(" (file name)", "")
+        pos = line_text.find(matched) if matched else -1
+        window = line_text[max(0, pos - 24):pos + len(matched) + 24] if pos >= 0 else ""
         for glob, rx in self.allow:
-            if fnmatch.fnmatch(base, glob) and rx.search(line_text):
+            if fnmatch.fnmatch(base, glob) and window and rx.search(window):
                 rec["allowed_by"] = f"{glob}::{rx.pattern}"; self.allowed.append(rec); return
         self.red.append(rec)
 
@@ -362,6 +366,11 @@ def selftest():
         res2 = scan_tree(rules, d, parse_allow(["u01.txt::janedoe1987"], None))
         check(not any(r["where"].startswith("u01.txt") for r in res2.red) and any(a["where"].startswith("u01.txt") for a in res2.allowed),
               "an allow entry moves u01 from RED to ALLOWED (still listed)")
+        open(os.path.join(d, "mixed.txt"), "wb").write(b"contact janedoe1987 " + b"." * 40 + b" key sk-ant-" + b"api03-zzzzzzzzzzzzzzzz")
+        res4 = scan_tree(rules, d, parse_allow(["mixed.txt::janedoe1987"], None))
+        mixed_red = {r["rule"] for r in res4.red if r["where"].startswith("mixed.txt")}
+        mixed_ok = {r["rule"] for r in res4.allowed if r["where"].startswith("mixed.txt")}
+        check(mixed_ok == {"U01"} and "R07" in mixed_red, f"allow is per hit, not per line: U01 allowed, the secret on the same line stays RED (red {sorted(mixed_red)}, allowed {sorted(mixed_ok)})")
         rules_ns = Rules(FAKE_CFG, note_scripts=True)
         open(os.path.join(d, "ru.md"), "wb").write("привет".encode("utf-8"))
         res3 = scan_tree(rules_ns, d, [])
