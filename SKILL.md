@@ -4,7 +4,7 @@ description: Privacy and secret gate to run before anything goes public — a re
 license: MIT
 metadata:
   provenance: own practice (2026-07 to 2026-09); no external source
-  version: 0.1.0
+  version: 0.1.2
 ---
 # Publish gate
 
@@ -36,7 +36,8 @@ report says so in its first line — your own identifiers are then **not** being
 1. Scan the tree exactly as it will be published (the clone you will push from, not your working copy):
    `python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --git-range origin/main..HEAD --json gate.json`
    For a repository going public for the first time use `--git-range HEAD` (all history).
-2. Read the four lists in order: **RED** (fix, or add an `--allow 'GLOB::REGEX'` entry with a reason),
+2. Read the four lists in order: **RED** (fix, or add an allow entry `RULES::GLOB::REGEX` with a reason; it must
+   cover the matched text itself, see `references/config-guide.md`),
    **ALLOWED** (still printed — every allow entry is a decision someone can review), **NOTE** (images, big
    files, AI tool names inside archives: a human looks), **UNSCANNED** (anything the gate could not open —
    open it by hand or remove it).
@@ -63,6 +64,6 @@ report says so in its first line — your own identifiers are then **not** being
 ## Provenance
 
 Own practice, 2026-07 to 2026-09. The rule set grew one incident at a time: seed data embedded in a
-public shell; a repo made public with its history still carrying account names and internal notes; a
+public app template; a repo made public with its history still carrying account names and internal notes; a
 `.pyc` with a username that passed because the scan excluded cache directories; a stale README command;
 a personal address as commit author. Each of those is a self-test sample now. No external source.

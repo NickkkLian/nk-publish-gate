@@ -14,7 +14,8 @@ Part of [nickkk-skills](https://github.com/NickkkLian/nickkk-skills) — skills 
 - Opens archives (zip/xlsx/docx/pptx) three levels deep, member names included; inflates PDF streams; scans binaries as bytes; looks at every file regardless of extension.
 - `--git-range` scans every commit's author, message and blobs — a deleted secret is still in history.
 - Your own identifiers live in a config outside every repo; built-in rules work without it.
-- Self-test with one sample per rule and a clean control; four destructive mutations verified red.
+- Allow entries name the rule they are for and must cover the matched text itself (`R10::README.md::you@example\.org`). 0.1.2 fixed an entry that could also let through a secret or a path right next to the allowed word; two-field entries (`GLOB::REGEX`) are still read, under the new rule.
+- Self-test with one sample per rule and a clean control; four destructive mutations verified red, and six more for the allow checks added in 0.1.2.
 
 The full procedure, the boundaries and where the rules came from are in [SKILL.md](SKILL.md).
 
@@ -25,6 +26,14 @@ The full procedure, the boundaries and where the rules came from are in [SKILL.m
 3. The verdict is green only when RED is empty
 4. History is dirty and must stay public? Decide with `references/history-decision.md` before rewriting
 5. After the push, clone from the public URL and scan the clone once more
+
+## Why it is built this way
+
+**The idea.** Publishing a folder publishes every byte in it, including the ones you cannot see: archive members, PDF streams, cache files, and every commit in the history. This gate looks at those bytes before you push.
+
+**Where it came from.** The rule set grew one incident at a time: seed data embedded in a public app template; a repo made public with its history still carrying account names and internal notes; a `.pyc` with a username that passed because the scan excluded cache directories; a stale README command; a personal address as commit author. Each of those is a self-test sample now.
+
+**Evidence.** What was broken on purpose to show that the self-tests can fail is under [Verify](#verify); what was run end to end, and in which agent, is under [Compatibility](#compatibility).
 
 ## Install
 

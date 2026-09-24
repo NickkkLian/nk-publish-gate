@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """publish_gate.py — scan a tree (and optionally a git commit range) for things that must not go public.
 
-    python3 publish_gate.py <dir> [--config gate.json] [--allow 'GLOB::REGEX' ...] [--allow-file F]
+    python3 publish_gate.py <dir> [--config gate.json] [--allow 'RULES::GLOB::REGEX' ...] [--allow-file F]
                                    [--git-range RANGE] [--json OUT] [--note-scripts]
     python3 publish_gate.py --init-config <path>      # write a config template (keep it OUTSIDE any repo)
     python3 publish_gate.py --selftest
@@ -22,7 +22,11 @@ Archives (PK header: zip/xlsx/docx/pptx/jar) are opened up to 3 levels, member n
 scanned as text; binaries are scanned as bytes; every file is looked at regardless of extension; anything unreadable is listed as UNSCANNED.
 --git-range: every commit in the range (e.g. origin/main..HEAD, or HEAD for all history) has its author/committer, message, and every
 added/modified blob scanned with the same rules. Publishing a repo publishes its whole history.
-allow entries: GLOB::REGEX — a hit whose relative path matches GLOB and whose line matches REGEX is downgraded to ALLOWED (still printed).
+allow entries: RULES::GLOB::REGEX (or GLOB::REGEX). A hit is downgraded to ALLOWED (still printed) only when its rule is in RULES
+(a comma list such as R10 or U01,U02; the two-field form takes any rule), its relative path matches GLOB, and a match of REGEX
+on the same line covers the matched text itself (in a binary: within 200 bytes on either side). Every match on a line is its own hit.
+0.1.2 changed this: until 0.1.1 an entry counted if REGEX matched within 24 characters of a hit, so an allowed word could hide a
+secret or a path right next to it; two-field entries are still read, and judged by the new rule.
 """
 import argparse, datetime, fnmatch, io, json, os, re, subprocess, sys, tempfile, zipfile, zlib
 
@@ -95,9 +99,26 @@ class Result:
         self.red, self.allowed, self.note, self.unscanned = [], [], [], []
         self.n_files = self.n_text = self.n_bytes = self.n_members = self.n_pdf = 0
 
-    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED"):
-        """An allow entry downgrades a hit only when its regex matches within ±24 characters of the match itself —
-        never the whole line, so a line that mixes an allowed word with a secret keeps the secret RED."""
+    def allowed_by(self, rule, where, text, span):
+        """The allow entry that covers this hit, or None. An entry covers a hit only when it names the hit's rule (a
+        two-field entry names every rule), its GLOB matches the path, and one match of its REGEX in `text` spans the
+        matched text itself — a neighbour on the same line is never enough, however close (0.1.1 accepted anything
+        within 24 characters, so an allowed word could hide a path or a secret right next to it)."""
+        if span is None:
+            return None
+        base = where.split("::")[0].replace(" (file name)", "")
+        for rules_ok, glob, rx in self.allow:
+            if rules_ok is not None and rule not in rules_ok:
+                continue
+            if not fnmatch.fnmatch(base, glob):
+                continue
+            if any(m.end() > m.start() and m.start() <= span[0] and span[1] <= m.end() for m in rx.finditer(text)):
+                return (",".join(sorted(rules_ok)) + "::" if rules_ok else "") + f"{glob}::{rx.pattern}"
+        return None
+
+    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None):
+        """Record a hit. `span` is where the match sits in `allow_text` (default: `line_text`); callers that know it pass
+        it, so a second occurrence of the same text is judged on its own. Returns the list it went to."""
         shown = matched[:6] + "…" + f"({len(matched)} chars)" if rule in MASK_RULES else matched
         excerpt = line_text.strip()
         if len(excerpt) > 160:
@@ -106,37 +127,38 @@ class Result:
             excerpt = excerpt.replace(matched, shown)
         rec = {"rule": rule, "label": label, "where": where, "line": line_no, "match": shown, "excerpt": excerpt}
         if tier == "NOTE":
-            self.note.append(rec); return
-        base = where.split("::")[0].replace(" (file name)", "")
-        pos = line_text.find(matched) if matched else -1
-        window = line_text[max(0, pos - 24):pos + len(matched) + 24] if pos >= 0 else ""
-        for glob, rx in self.allow:
-            if fnmatch.fnmatch(base, glob) and window and rx.search(window):
-                rec["allowed_by"] = f"{glob}::{rx.pattern}"; self.allowed.append(rec); return
-        self.red.append(rec)
+            self.note.append(rec); return "note"
+        text = line_text if allow_text is None else allow_text
+        if span is None:
+            pos = text.find(matched) if matched else -1
+            span = (pos, pos + len(matched)) if pos >= 0 else None
+        by = self.allowed_by(rule, where, text, span)
+        if by:
+            rec["allowed_by"] = by; self.allowed.append(rec); return "allowed"
+        self.red.append(rec); return "red"
 
 
 def scan_text(rules, res, where, text, inside):
     lines = text.splitlines() or [""]
     for i, line in enumerate(lines, 1):
         for rid, label, rx in rules.text:
-            m = rx.search(line)
-            if m:
-                res.hit(rid, label, where, i, line, m.group(0))
+            for m in rx.finditer(line):          # every match: a first one that is allowed must not hide the next
+                if m.group(0):
+                    res.hit(rid, label, where, i, line, m.group(0), span=m.span())
         for m in ASSIGNED.finditer(line):
             val = m.group(2)
             if sum(c.isdigit() for c in val) >= 3 and not PLACEHOLDER.search(val):
-                res.hit("R08", "assigned secret", where, i, line, val)
+                res.hit("R08", "assigned secret", where, i, line, val, span=m.span(2))
         for rx in PHONES:
             for m in rx.finditer(line):
                 if m.group(0).isdigit():
                     continue
                 if not _is_test_number(re.sub(r"\D", "", m.group(0))):
-                    res.hit("R09", "non-fictional phone number", where, i, line, m.group(0))
+                    res.hit("R09", "non-fictional phone number", where, i, line, m.group(0), span=m.span())
         for m in EMAIL.finditer(line):
             if not EXAMPLE_MAIL.search(m.group(0)):
                 local, _, domain = m.group(0).partition("@")
-                res.hit("R10", "non-example e-mail", where, i, line, local[:1] + "***@" + domain)
+                res.hit("R10", "non-example e-mail", where, i, line, local[:1] + "***@" + domain, span=m.span())
         if inside:
             m = TOOL_RESIDUE.search(line)
             if m:
@@ -146,11 +168,30 @@ def scan_text(rules, res, where, text, inside):
         res.hit("R14", "non-Latin script", where, 0, f"{n} lines", f"{n} lines", tier="NOTE")
 
 
+BIN_WINDOW = 200        # bytes on either side of a binary hit that an allow REGEX is matched in
+BIN_LISTED = 20         # allowed occurrences listed per rule and file; the rest are still checked, just not listed
+
+
 def scan_bytes(rules, res, where, data):
+    """Every occurrence of a rule in a binary is judged on its own. The first one that is not allowed makes the file
+    RED for that rule (later ones would not change that, so they are not listed); allowed ones are listed up to
+    BIN_LISTED and after that only checked. The window is decoded as UTF-8 with undecodable bytes kept as escapes,
+    so an allow REGEX written in any script matches the same text it would match in a text file."""
     for rid, label, rx in rules.bytes:
-        m = rx.search(data)
-        if m:
-            s = m.group(0)[:200].decode("utf-8", "replace"); res.hit(rid, label + " (binary)", where, 0, s, s)
+        listed = 0
+        for m in rx.finditer(data):
+            if not m.group(0):
+                continue
+            lo = max(0, m.start() - BIN_WINDOW)
+            window = data[lo:m.end() + BIN_WINDOW].decode("utf-8", "surrogateescape")
+            start = len(data[lo:m.start()].decode("utf-8", "surrogateescape"))
+            span = (start, start + len(m.group(0).decode("utf-8", "surrogateescape")))
+            if listed >= BIN_LISTED and res.allowed_by(rid, where, window, span):
+                continue
+            s = m.group(0)[:200].decode("utf-8", "replace")
+            if res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window) == "red":
+                break
+            listed += 1
     m = rules.tool_b.search(data)
     if m:
         s = m.group(0).decode("utf-8", "replace"); res.hit("R13", "AI tool name (binary)", where, 0, s, s, tier="NOTE")
@@ -274,15 +315,25 @@ def scan_git_range(rules, repo, rng, res):
     return len(shas), n_blobs
 
 
+RULE_LIST = re.compile(r"[RU]\d\d(?:,[RU]\d\d)*")
+
+
 def parse_allow(items, path):
+    """RULES::GLOB::REGEX (RULES a comma list of rule IDs) or GLOB::REGEX (any rule). An entry whose first field is a
+    list of rule IDs is read as the three-field form; REGEX may itself contain '::'."""
     out, raw = [], list(items or [])
     if path:
         raw += [l.strip() for l in open(path, encoding="utf-8") if l.strip() and not l.startswith("#")]
     for it in raw:
-        glob, _, rx = it.partition("::")
-        if not rx:
-            raise ValueError(f"allow entry needs GLOB::REGEX: {it}")
-        out.append((glob, re.compile(rx)))
+        head, sep, rest = it.partition("::")
+        if RULE_LIST.fullmatch(head) and "::" in rest:
+            glob, _, rx = rest.partition("::")
+            rules_ok = frozenset(head.split(","))
+        else:
+            glob, rx, rules_ok = head, rest, None
+        if not sep or not glob or not rx:
+            raise ValueError(f"allow entry needs RULES::GLOB::REGEX or GLOB::REGEX: {it}")
+        out.append((rules_ok, glob, re.compile(rx)))
     return out
 
 
@@ -371,6 +422,44 @@ def selftest():
         mixed_red = {r["rule"] for r in res4.red if r["where"].startswith("mixed.txt")}
         mixed_ok = {r["rule"] for r in res4.allowed if r["where"].startswith("mixed.txt")}
         check(mixed_ok == {"U01"} and "R07" in mixed_red, f"allow is per hit, not per line: U01 allowed, the secret on the same line stays RED (red {sorted(mixed_red)}, allowed {sorted(mixed_ok)})")
+        # 0.1.2: an entry must cover the matched text itself, rule by rule, and every occurrence is judged on its own
+        def at(r, name, tier):
+            return {x["rule"] for x in getattr(r, tier) if x["where"].startswith(name)}
+        open(os.path.join(d, "near.txt"), "wb").write(b"owner janedoe1987 wrote \x2fUsers\x2fsynthetic/private.txt")
+        r5 = scan_tree(rules, d, parse_allow(["near.txt::janedoe1987"], None))
+        check(at(r5, "near.txt", "allowed") == {"U01"} and "R04" in at(r5, "near.txt", "red"),
+              f"an allowed word right next to a path does not allow the path (red {sorted(at(r5, 'near.txt', 'red'))})")
+        open(os.path.join(d, "twice.txt"), "wb").write(b"janedoe1987 and later janedoe1987")
+        r6 = scan_tree(rules, d, parse_allow(["twice.txt::janedoe1987 and"], None))
+        check("U01" in at(r6, "twice.txt", "allowed") and "U01" in at(r6, "twice.txt", "red"),
+              "two matches of one rule on a line: the entry covers the first, the second stays RED")
+        open(os.path.join(d, "scoped.txt"), "wb").write(b"see \x2fUsers\x2fsynthetic/janedoe1987.txt")
+        r7 = scan_tree(rules, d, parse_allow(["R04::scoped.txt::\x2fUsers\x2fsynthetic/janedoe1987\\.txt"], None))
+        r7b = scan_tree(rules, d, parse_allow(["scoped.txt::\x2fUsers\x2fsynthetic/janedoe1987\\.txt"], None))
+        check("R04" in at(r7, "scoped.txt", "allowed") and "U01" in at(r7, "scoped.txt", "red")
+              and {"R04", "U01"} <= at(r7b, "scoped.txt", "allowed"),
+              "RULES::GLOB::REGEX allows only the named rule; the same REGEX without RULES allows both hits it covers")
+        pa = parse_allow(["R04,U01::a.txt::x::y", "a.txt::x"], None)
+        try:
+            parse_allow(["no separator here"], None); bad_refused = False
+        except ValueError:
+            bad_refused = True
+        check(pa[0][0] == frozenset({"R04", "U01"}) and pa[0][1] == "a.txt" and pa[0][2].pattern == "x::y"
+              and pa[1][0] is None and bad_refused,
+              "allow entries: three-field and two-field forms parse, REGEX may contain '::', a malformed entry is refused")
+        open(os.path.join(d, "bin1.dat"), "wb").write(b"\x00\x01janedoe1987 \x2fUsers\x2fsynthetic/private\x00\x02")
+        r8 = scan_tree(rules, d, parse_allow(["bin1.dat::janedoe1987"], None))
+        check(at(r8, "bin1.dat", "allowed") == {"U01"} and "R04" in at(r8, "bin1.dat", "red"),
+              "in a binary, an allowed word right next to a path does not allow the path")
+        open(os.path.join(d, "bin2.dat"), "wb").write(b"\x00janedoe1987-ok\x00" + b"x" * 300 + b"\x00janedoe1987\x00")
+        r9 = scan_tree(rules, d, parse_allow(["bin2.dat::janedoe1987-ok"], None))
+        check("U01" in at(r9, "bin2.dat", "allowed") and "U01" in at(r9, "bin2.dat", "red"),
+              "in a binary, a second occurrence of an allowed rule is judged on its own")
+        open(os.path.join(d, "bin3.dat"), "wb").write(b"\x00" + b"janedoe1987-ok\x00" * (BIN_LISTED + 5) + b"janedoe1987\x00")
+        r10 = scan_tree(rules, d, parse_allow(["bin3.dat::janedoe1987-ok"], None))
+        n_listed = sum(1 for x in r10.allowed if x["where"].startswith("bin3.dat"))
+        check("U01" in at(r10, "bin3.dat", "red") and n_listed == BIN_LISTED,
+              f"in a binary, past the {BIN_LISTED} listed allowed occurrences a real one is still found (listed {n_listed})")
         rules_ns = Rules(FAKE_CFG, note_scripts=True)
         open(os.path.join(d, "ru.md"), "wb").write("привет".encode("utf-8"))
         res3 = scan_tree(rules_ns, d, [])
