@@ -1,31 +1,82 @@
 # nk-publish-gate
 
-![nk-publish-gate](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/social/nk-publish-gate.png)
-
 An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](https://developers.openai.com/codex). Privacy and secret gate to run before anything goes public — a repo, a release zip, a demo folder, a PDF.
+
+**What you get.** One real run of nk-publish-gate 0.1.3, copied from the terminal on 2026-09-30:
+
+```text
+$ python3 scripts/publish_gate.py demo
+publish_gate selftest · 2026-09-30 23:05:15 · 68/68 passed
+config: none (built-in rules only — your own identifiers are NOT being checked)
+scanned demo: 2 files · 2 text · 0 binary · 1 archive member name · 0 PDF streams
+RED (2):
+  [R12 junk file on the publish surface] .env:0  .env   | .env
+  [R07 secret shape] book.xlsx::xl/notes.txt:1  sk-ant…(33 chars)   | key sk-ant…(33 chars)
+ALLOWED (0):
+NOTE (0):
+UNSCANNED (0): none
+verdict: 🔴 RED — do not publish
+```
+
+![nk-publish-gate](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/social/nk-publish-gate.png)
 
 Part of [nickkk-skills](https://github.com/NickkkLian/nickkk-skills) — skills that stop an AI coding agent's
 "done, tested, safe" from being taken on faith.
 
+## Try it
+
+Nothing is installed and nothing under `~/.claude` changes: clone, run the self-test, run the example (it only writes inside the clone).
+
+```bash
+git clone https://github.com/NickkkLian/nk-publish-gate && cd nk-publish-gate
+python3 scripts/publish_gate.py --selftest
+mkdir -p demo && touch demo/.env
+python3 -c "import zipfile; zipfile.ZipFile('demo/book.xlsx', 'w').writestr('xl/notes.txt', 'key sk-' + 'ant-api03-FAKEfake0000FAKEfake')"
+python3 scripts/publish_gate.py demo
+```
+
+The self-test prints:
+
+```text
+publish_gate selftest · 2026-09-30 23:05:15 · 68/68 passed
+```
+
+The last command prints the block at the top of this page; its last line is the one below, and its exit code is 1 (non-zero on purpose: it found something).
+
+```text
+verdict: 🔴 RED — do not publish
+```
+
 ![nk-publish-gate demo: before and after](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/nk-publish-gate.gif)
+
+The demo above is a rendering of an earlier run and cuts its longest lines short; the block at the top of this page is a full run of this version.
 
 ## What it does
 
 - Opens archives (zip/xlsx/docx/pptx) three levels deep, member names included; inflates PDF streams; scans binaries as bytes; looks at every file regardless of extension.
 - `--git-range` scans every commit's author, message and blobs — a deleted secret is still in history.
 - Your own identifiers live in a config outside every repo; built-in rules work without it.
-- Allow entries name the rule they are for and must cover the matched text itself (`R10::README.md::you@example\.org`). 0.1.2 fixed an entry that could also let through a secret or a path right next to the allowed word; two-field entries (`GLOB::REGEX`) are still read, under the new rule.
-- Self-test with one sample per rule and a clean control; four destructive mutations verified red, and six more for the allow checks added in 0.1.2.
+- For secrets it is a backstop, not a scanner: fourteen key formats and `api_key = <long value>`-style assignments. Run gitleaks or trufflehog as well; what this gate adds is everything on this list that is not a credential.
+- Allow entries name the rule they are for and must cover the matched text itself (`R10::README.md::you@example\.org`).
+- Self-test with one sample per rule and per key format, and a clean control.
 
 The full procedure, the boundaries and where the rules came from are in [SKILL.md](SKILL.md).
 
+## Next to gitleaks and trufflehog
+
+For secrets, use a secret scanner: gitleaks and trufflehog know far more key formats than this gate and are built for that job. This
+gate's secret rule is a backstop (fourteen formats). What it is for is the rest of the list: things that are not credentials and
+still should not go public, such as a home-directory path inside an xlsx or a PDF stream, a username in a `.pyc`, a personal mailbox as
+commit author, and your own names and handles from a config. gitleaks was not installed or run next to this gate, so no head-to-head
+result is claimed.
+
 ## How it works
 
-1. Scan the tree exactly as it will be published (the clone you will push from, not your working copy)
-2. Read the four lists in order
-3. The verdict is green only when RED is empty
-4. History is dirty and must stay public? Decide with `references/history-decision.md` before rewriting
-5. After the push, clone from the public URL and scan the clone once more
+1. Scan the tree exactly as it will be published (the clone you will push from, not your working copy).
+2. Read the four lists in order: RED, ALLOWED, NOTE and UNSCANNED.
+3. The verdict is green only when RED is empty.
+4. History is dirty and must stay public? Decide with `references/history-decision.md` before rewriting.
+5. After the push, clone from the public URL and scan the clone once more.
 
 ## Why it is built this way
 
@@ -112,14 +163,20 @@ In this skill's Codex run, every call into the skill folder's scripts/ used that
 python3 scripts/publish_gate.py --selftest
 ```
 
-Standard library only, Python 3.9+. Before publishing, the guarded lines of each script were
-mutated one at a time in a sandbox copy and the self-test was confirmed to go red on the named
-assertion, without a traceback; the unmutated control stayed green.
+Standard library only, Python 3.9+. On 2026-09-30 every self-test above passed, and
+`breakcheck.py` from [nk-breakable-selftest](https://github.com/NickkkLian/nk-breakable-selftest) broke each script on purpose in a sandbox copy:
+
+- `publish_gate.py`: 20 lines broken one at a time; 15 turned the self-test red without a traceback. Not covered: the self-test stayed green with L207, L292, L313 switched off; switching off L202, L355 crashed the script instead of failing a sample, which does not count as caught.
+
+The unmutated control stayed green every time. Only lines that record a finding, raise, or return a failing exit code
+were broken (the tool's pattern, or the hand-written list); a line number refers to the script as shipped in this version.
+This shows those lines are covered. It does not show that nothing else can fail.
 
 ## Limits
 
 - Text drawn as glyph outlines in a PDF, and anything inside a screenshot, are invisible to it (NOTE lists the images so you look). Encrypted archives are listed as UNSCANNED.
-- Rules are regular expressions: a name spelled differently, or a secret in an unknown format, passes. Add the shape to the config when you learn of one.
+- It is not a secret scanner. The secret rule knows fourteen key formats (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe live keys, npm, GitLab, SendGrid, Twilio, Hugging Face, signed JWTs, PEM private keys); any other format passes unless it sits behind `api_key =`, `token =`, `secret =` or `password =`. Use gitleaks or trufflehog for secrets; gitleaks was not run next to this gate, so no head-to-head numbers are claimed.
+- Rules are regular expressions: a name spelled differently passes.
 - It does not judge whether the *existence* of a file should be public. That question is yours.
 
 ## License

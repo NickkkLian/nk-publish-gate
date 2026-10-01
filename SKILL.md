@@ -4,7 +4,7 @@ description: Privacy and secret gate to run before anything goes public — a re
 license: MIT
 metadata:
   provenance: own practice (2026-07 to 2026-09); no external source
-  version: 0.1.2
+  version: 0.1.3
 ---
 # Publish gate
 
@@ -45,20 +45,30 @@ report says so in its first line — your own identifiers are then **not** being
 4. History is dirty and must stay public? Decide with `references/history-decision.md` before rewriting.
 5. After the push, clone from the public URL and scan the clone once more. The clone is what the world got.
 
-## What it catches that a plain grep does not
+## What it looks for that a secret scanner does not
+
+A secret scanner (gitleaks, trufflehog) looks for credentials, and is better at it than this gate: run one as
+well. This gate is mostly about what is not a credential and still should not go public:
 
 - A `.pyc` in `__pycache__/` that contains the local username in a path string.
-- A local path in `xl/styles.xml` inside an `.xlsx`, or inside a zip nested in that xlsx.
+- A home-directory path in `xl/styles.xml` inside an `.xlsx`, or inside a zip nested in that xlsx.
 - A path inside a Flate-compressed PDF content stream.
-- A secret that was committed, then deleted: the working tree is clean, `--git-range HEAD` is red.
 - An author e-mail that is a personal mailbox rather than the noreply address.
+- Your own identifiers from the config: handles, legal names, hostnames, private project names.
+- Phone numbers and e-mail addresses that are not the officially fictional ones.
+
+It also carries a short secret rule (fourteen key formats and `api_key = <long value>`-style assignments), and with
+`--git-range` it finds a secret that was committed and then deleted. That rule is a backstop, not a scanner.
 
 ## Boundaries
 
 - Text drawn as glyph outlines in a PDF, and anything inside a screenshot, are invisible to it (NOTE lists
   the images so you look). Encrypted archives are listed as UNSCANNED.
-- Rules are regular expressions: a name spelled differently, or a secret in an unknown format, passes.
-  Add the shape to the config when you learn of one.
+- It is not a secret scanner. The secret rule knows fourteen key formats (Anthropic, OpenAI, GitHub, AWS, Slack,
+  Google, Stripe live keys, npm, GitLab, SendGrid, Twilio, Hugging Face, signed JWTs, PEM private keys); any other
+  format passes unless it sits behind `api_key =`, `token =`, `secret =` or `password =`. Use gitleaks or trufflehog
+  for secrets; gitleaks was not run next to this gate, so no head-to-head numbers are claimed.
+- Rules are regular expressions: a name spelled differently passes.
 - It does not judge whether the *existence* of a file should be public. That question is yours.
 
 ## Provenance

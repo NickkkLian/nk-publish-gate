@@ -11,7 +11,8 @@ shares scan_tree / scan_git_range with the real run, and aborts everything if it
 
 Built-in RED rules (no config needed):
   R04 home-directory and mount paths (macOS and Linux home dirs, private tmp, mounted volumes, a home Desktop)   R05 Windows user paths
-  R07 secret shapes (Anthropic/OpenAI/GitHub/AWS/Slack/Google keys, PEM headers)   R08 key/token/secret/password = <long value with digits> (placeholders excluded)
+  R07 secret shapes (Anthropic/OpenAI/GitHub/AWS/Slack/Google/Stripe/npm/GitLab/SendGrid/Twilio/Hugging Face keys, JWTs, PEM headers;
+      a short list, not a secret scanner: run gitleaks or trufflehog as well)   R08 key/token/secret/password = <long value with digits> (placeholders excluded)
   R09 phone numbers outside the officially fictional ranges (NA 555-01xx, UK 07700 900xxx / 020 7946 0xxx)
   R10 e-mail addresses that are not example/invalid/noreply                         R12 cache dirs, .env, .DS_Store, *.pyc, *.log …
   R15 file >= 100 MB (GitHub rejects)                                                R17 (--git-range) author/committer not in allowed_author_emails
@@ -40,9 +41,18 @@ BUILTIN_RED = [
     # written with \x2f for "/" so that the gate does not flag its own source when it scans itself
     ("R04", "local absolute path", r"\x2fUsers\x2f|\x2fhome\x2f[a-z]|\x2fprivate\x2ftmp\x2f|\x2fVolumes\x2f|~\x2fDesktop|~\x2fDocuments", 0),
     ("R05", "Windows user path", r"\b[A-Za-z]:[\\/]+Users[\\/]", re.I),
-    ("R07", "secret shape", r"sk-ant-[A-Za-z0-9_-]{8,}|\bsk-(?:proj-)?[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}"
+    ("R07", "secret shape", r"sk-ant-[A-Za-z0-9_-]{8,}|\bsk-(?:proj-)?[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}"
                             r"|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}"
-                            r"|-----BEGIN [A-Z ]*PRIVATE KEY-----", 0),
+                            r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+                            # 0.1.3: six more published formats (a review found 4 of 10 common shapes caught). Still a short
+                            # list: a dedicated secret scanner (gitleaks, trufflehog) knows hundreds. Run one as well.
+                            r"|\b[sr]k_live_[A-Za-z0-9]{16,}"                                   # Stripe live secret / restricted key
+                            r"|\bnpm_[A-Za-z0-9]{36}"                                           # npm access token
+                            r"|\bglpat-[A-Za-z0-9_-]{20,}"                                      # GitLab personal access token
+                            r"|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}"                      # SendGrid API key
+                            r"|\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"  # a signed JSON Web Token
+                            r"|\bSK[0-9a-fA-F]{32}\b"                                          # Twilio API key SID
+                            r"|\bhf_[A-Za-z0-9]{30,}", 0),                                      # Hugging Face token
 ]
 MASK_RULES = {"R07", "R08"}
 ASSIGNED = re.compile(r"\b(api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*['\"]?([A-Za-z0-9_\-]{20,})", re.I)
@@ -288,6 +298,15 @@ def scan_tree(rules, root, allow, big_note=BIG_NOTE, big_red=BIG_RED):
     return res
 
 
+def _n(n, word):
+    """'1 file', '2 files': a count with its noun in the right number"""
+    return f"{n:,} {word}{'' if n == 1 else 's'}"
+
+
+def exit_code(res):
+    return 1 if res.red else 0
+
+
 def _git(repo, *args, binary=False):
     r = subprocess.run(["git", "-C", repo, "-c", "core.quotepath=false", *args], capture_output=True)
     if r.returncode != 0:
@@ -352,6 +371,17 @@ SAMPLES = [  # (relative path, bytes, must hit, must not hit) — fragments join
     ("r04b.txt", b"mounted at \x2fVolumes\x2fWork/data", {"R04"}, set()),
     ("r05.txt", b"C:\x5cUsers\x5csomeone\x5cproj", {"R05"}, set()),
     ("r07.txt", b"key sk-ant-" b"api03-abcdefghijklmnop", {"R07"}, set()),
+    # one sample per format added in 0.1.3; each value is split, and obviously not a real key
+    ("r07-github-server.txt", b"key gh" b"s_" b"FAKEfake0000FAKEfake0000", {"R07"}, set()),
+    ("r07-stripe.txt", b"key sk_" b"live_" b"FAKEfake0000FAKEfake0000", {"R07"}, set()),
+    ("r07-npm.txt", b"key np" b"m_" b"FAKEfake0000FAKEfake0000FAKEfake0000", {"R07"}, set()),
+    ("r07-gitlab.txt", b"key gl" b"pat-" b"FAKEfake0000FAKEfake", {"R07"}, set()),
+    ("r07-sendgrid.txt", b"key S" b"G." b"FAKEfake0000FAKEfake00" b"." b"FAKEfake0000FAKEfake0000FAKEfake0000FAKEfak", {"R07"}, set()),
+    ("r07-jwt.txt", b"key ey" b"JhbGciOiJub25lIn0" b"." b"ey" b"JzdWIiOiJmYWtlIn0" b"." b"FAKEfake0000", {"R07"}, set()),
+    ("r07-twilio.txt", b"key S" b"K" b"0123456789abcdef0123456789abcdef", {"R07"}, set()),
+    ("r07-huggingface.txt", b"key h" b"f_" b"FAKEfake0000FAKEfake0000FAKEfake00", {"R07"}, set()),
+    ("r07ok.txt", b"npm_config_cache sk_live_ SKU12345 SG.short.x eyJ.only.one glpat-short hf_hub ghs_x "
+                  b"sha 0123456789abcdef0123456789abcdef task-12345678901234567890", set(), {"R07"}),
     ("r08.txt", b'API_KEY = "a1b2c3d4e5f6' b'g7h8i9j0k1l2"', {"R08"}, set()),
     ("r08ok.txt", b'API_KEY = "YOUR_API_KEY_GOES_HERE_12345"\ntoken = localStorage.getItem', set(), {"R08"}),
     ("r09.txt", b"call +1 6" b"04 123 4567", {"R09"}, set()),
@@ -407,6 +437,7 @@ def selftest():
             for r in must_not:
                 check(r not in got, f"{rel} does not hit {r} (got {sorted(got)})")
         check("R12" in by_where.get("__pycache__/", set()), "__pycache__/ directory itself is R12")
+        check(exit_code(res) == 1, "a scan with RED hits exits 1")
         xl = {rec["rule"] for rec in res.red if rec["where"].startswith("book.xlsx")}
         check("R04" in xl, f"path inside a zip nested in an xlsx is R04 (got {sorted(xl)})")
         check("U02" in xl, f"legal name in an archive member name is U02 (got {sorted(xl)})")
@@ -468,6 +499,7 @@ def selftest():
         open(os.path.join(d, "ok.md"), "w").write("# fine\n")
         res = scan_tree(rules, d, [])
         check(not res.red and res.n_files == 1, f"clean directory: 0 RED ({res.n_files} file scanned)")
+        check(exit_code(res) == 0, "a scan with no RED hit exits 0")
     with tempfile.TemporaryDirectory() as d:
         def g(*a, env=None):
             e = dict(os.environ, GIT_AUTHOR_NAME="j", GIT_AUTHOR_EMAIL="12345+janed@users.noreply.github.com",
@@ -522,8 +554,8 @@ def main():
     print(f"config: {cfg_path or 'none (built-in rules only — your own identifiers are NOT being checked)'}")
     if a.git_range:
         n_c, n_b = scan_git_range(rules, a.dir, a.git_range, res)
-        print(f"git range {a.git_range}: {n_c} commits, {n_b} blobs scanned")
-    print(f"scanned {a.dir}: {res.n_files} files · {res.n_text} text · {res.n_bytes} binary · {res.n_members} archive member names · {res.n_pdf} PDF streams")
+        print(f"git range {a.git_range}: {_n(n_c, 'commit')}, {_n(n_b, 'blob')} scanned")
+    print(f"scanned {a.dir}: {_n(res.n_files, 'file')} · {res.n_text} text · {res.n_bytes} binary · {_n(res.n_members, 'archive member name')} · {_n(res.n_pdf, 'PDF stream')}")
     for title, rows in (("RED", res.red), ("ALLOWED", res.allowed), ("NOTE", res.note)):
         print(f"{title} ({len(rows)}):")
         for r in rows:
@@ -536,7 +568,7 @@ def main():
     if a.json:
         json.dump({"stamp": stamp, "dir": os.path.abspath(a.dir), "config": cfg_path, "git_range": a.git_range, "red": res.red,
                    "allowed": res.allowed, "note": res.note, "unscanned": res.unscanned, "verdict": verdict}, open(a.json, "w"), indent=1, ensure_ascii=False)
-    return 1 if res.red else 0
+    return exit_code(res)
 
 
 if __name__ == "__main__":
