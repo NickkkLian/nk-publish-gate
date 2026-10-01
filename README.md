@@ -1,22 +1,12 @@
 # nk-publish-gate
 
-An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](https://developers.openai.com/codex). Privacy and secret gate to run before anything goes public — a repo, a release zip, a demo folder, a PDF.
+An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](https://developers.openai.com/codex). A privacy gate to run before anything goes public (a repo, a release zip, a demo folder, a PDF): it finds what is private but is not a secret, such as a home-directory path inside an xlsx, a username in a .pyc or a personal address in the commit history.
 
-**What you get.** One real run of nk-publish-gate 0.1.3, copied from the terminal on 2026-09-30:
+**What you get.** Two things that are private and are not secrets, so a secret scanner has no rule for them: a home-directory path in a text file inside a zip inside an xlsx, and the path a `.pyc` records for the file it was compiled from. A real run of nk-publish-gate 0.1.4 on 2026-10-01:
 
-```text
-$ python3 scripts/publish_gate.py demo
-publish_gate selftest · 2026-09-30 23:05:15 · 68/68 passed
-config: none (built-in rules only — your own identifiers are NOT being checked)
-scanned demo: 2 files · 2 text · 0 binary · 1 archive member name · 0 PDF streams
-RED (2):
-  [R12 junk file on the publish surface] .env:0  .env   | .env
-  [R07 secret shape] book.xlsx::xl/notes.txt:1  sk-ant…(33 chars)   | key sk-ant…(33 chars)
-ALLOWED (0):
-NOTE (0):
-UNSCANNED (0): none
-verdict: 🔴 RED — do not publish
-```
+![nk-publish-gate: a real run. RED (4): a cache folder; a home path in a text file inside a zip inside an xlsx; a .pyc; and the home path that .pyc records for the file it was compiled from. Verdict: RED, do not publish](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/results/nk-publish-gate.png)
+
+It is a picture because this README has to pass the same gate, and two of the red lines quote a home path. The run as text is what the last command under [Try it](#try-it) prints.
 
 ![nk-publish-gate](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/social/nk-publish-gate.png)
 
@@ -30,31 +20,29 @@ Nothing is installed and nothing under `~/.claude` changes: clone, run the self-
 ```bash
 git clone https://github.com/NickkkLian/nk-publish-gate && cd nk-publish-gate
 python3 scripts/publish_gate.py --selftest
-mkdir -p demo && touch demo/.env
-python3 -c "import zipfile; zipfile.ZipFile('demo/book.xlsx', 'w').writestr('xl/notes.txt', 'key sk-' + 'ant-api03-FAKEfake0000FAKEfake')"
+mkdir -p demo/__pycache__ && printf 'print(1)\n' > demo/job.py
+python3 -c "import io, zipfile; inner = io.BytesIO(); zipfile.ZipFile(inner, 'w').writestr('notes/todo.txt', 'export of /Users' + '/jane/Clients/acme/q3.xlsx'); zipfile.ZipFile('demo/book.xlsx', 'w').writestr('xl/embeddings/inner.zip', inner.getvalue())"
+python3 -c "import py_compile; py_compile.compile('demo/job.py', cfile='demo/__pycache__/job.pyc', dfile='/Users' + '/jane/work/job.py')"
 python3 scripts/publish_gate.py demo
 ```
 
 The self-test prints:
 
 ```text
-publish_gate selftest · 2026-09-30 23:05:15 · 68/68 passed
+publish_gate selftest · 2026-10-01 00:27:05 · 68/68 passed
 ```
 
-The last command prints the block at the top of this page; its last line is the one below, and its exit code is 1 (non-zero on purpose: it found something).
+The last command prints what the picture at the top of this page shows; its last line is the one below, and its exit code is 1 (non-zero on purpose: it found something).
 
 ```text
 verdict: 🔴 RED — do not publish
 ```
 
-![nk-publish-gate demo: before and after](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/nk-publish-gate.gif)
-
-The demo above is a rendering of an earlier run and cuts its longest lines short; the block at the top of this page is a full run of this version.
-
 ## What it does
 
+- Finds a home-directory path, a personal mailbox or one of your own names wherever it sits: in a text file inside a zip inside an xlsx, in a PDF stream, in a `.pyc`, in a commit's author line. None of these is a credential, so a secret scanner has no rule for them.
 - Opens archives (zip/xlsx/docx/pptx) three levels deep, member names included; inflates PDF streams; scans binaries as bytes; looks at every file regardless of extension.
-- `--git-range` scans every commit's author, message and blobs — a deleted secret is still in history.
+- `--git-range` scans every commit's author, message and blobs — a line deleted last week is still in the history you publish.
 - Your own identifiers live in a config outside every repo; built-in rules work without it.
 - For secrets it is a backstop, not a scanner: fourteen key formats and `api_key = <long value>`-style assignments. Run gitleaks or trufflehog as well; what this gate adds is everything on this list that is not a credential.
 - Allow entries name the rule they are for and must cover the matched text itself (`R10::README.md::you@example\.org`).
@@ -64,11 +52,12 @@ The full procedure, the boundaries and where the rules came from are in [SKILL.m
 
 ## Next to gitleaks and trufflehog
 
-For secrets, use a secret scanner: gitleaks and trufflehog know far more key formats than this gate and are built for that job. This
-gate's secret rule is a backstop (fourteen formats). What it is for is the rest of the list: things that are not credentials and
-still should not go public, such as a home-directory path inside an xlsx or a PDF stream, a username in a `.pyc`, a personal mailbox as
-commit author, and your own names and handles from a config. gitleaks was not installed or run next to this gate, so no head-to-head
-result is claimed.
+For secrets, use a secret scanner. [gitleaks](https://github.com/gitleaks/gitleaks) and trufflehog know far more key formats than this
+gate; gitleaks reads the git history, and with `--max-archive-depth` it opens nested archives too (its README, read 2026-10-01). This
+gate's secret rule is a backstop (fourteen formats). What this gate is for is what a secret scanner has no rule for, because it is not a
+credential and still should not go public: a home-directory path inside an xlsx or a PDF stream, a username in a `.pyc`, a personal
+mailbox as commit author, and your own names and handles from a config. gitleaks was not installed or run next to this gate, so no
+head-to-head result is claimed.
 
 ## How it works
 
@@ -163,7 +152,7 @@ In this skill's Codex run, every call into the skill folder's scripts/ used that
 python3 scripts/publish_gate.py --selftest
 ```
 
-Standard library only, Python 3.9+. On 2026-09-30 every self-test above passed, and
+Standard library only, Python 3.9+. On 2026-10-01 every self-test above passed, and
 `breakcheck.py` from [nk-breakable-selftest](https://github.com/NickkkLian/nk-breakable-selftest) broke each script on purpose in a sandbox copy:
 
 - `publish_gate.py`: 20 lines broken one at a time; 15 turned the self-test red without a traceback. Not covered: the self-test stayed green with L207, L292, L313 switched off; switching off L202, L355 crashed the script instead of failing a sample, which does not count as caught.
