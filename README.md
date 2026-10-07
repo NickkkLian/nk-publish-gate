@@ -2,7 +2,7 @@
 
 An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](https://developers.openai.com/codex). A privacy gate to run before anything goes public (a repo, a release zip, a demo folder, a PDF): it finds what is private but is not a secret, such as a home-directory path inside an xlsx, a username in a .pyc or a personal address in the commit history.
 
-**What you get.** Two things that are private and are not secrets, so a secret scanner has no rule for them: a home-directory path in a text file inside a zip inside an xlsx, and the path a `.pyc` records for the file it was compiled from. A real run of nk-publish-gate 0.1.4 on 2026-10-01:
+**What you get.** Two things that are private and are not secrets, so a secret scanner has no rule for them: a home-directory path in a text file inside a zip inside an xlsx, and the path a `.pyc` records for the file it was compiled from. A real run of nk-publish-gate 0.1.5 on 2026-10-07:
 
 ![nk-publish-gate: a real run. RED (4): a cache folder; a home path in a text file inside a zip inside an xlsx; a .pyc; and the home path that .pyc records for the file it was compiled from. Verdict: RED, do not publish](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/results/nk-publish-gate.png)
 
@@ -29,7 +29,7 @@ python3 scripts/publish_gate.py demo
 The self-test prints:
 
 ```text
-publish_gate selftest · 2026-10-01 00:27:05 · 68/68 passed
+publish_gate selftest · 2026-10-07 16:31:45 · 177/177 passed
 ```
 
 The last command prints what the picture at the top of this page shows; its last line is the one below, and its exit code is 1 (non-zero on purpose: it found something).
@@ -47,6 +47,7 @@ verdict: 🔴 RED — do not publish
 - For secrets it is a backstop, not a scanner: fourteen key formats and `api_key = <long value>`-style assignments. Run gitleaks or trufflehog as well; what this gate adds is everything on this list that is not a credential.
 - Allow entries name the rule they are for and must cover the matched text itself (`R10::README.md::you@example\.org`).
 - Self-test with one sample per rule and per key format, and a clean control.
+- Phone checks include leading-zero national forms, phone-word bare 10/11-digit runs, and Chinese national mobiles (11 digits starting 13–19, including matching IDs). Bare ten-digit runs without a phone word stay clean. North American numbers followed by a full stop are caught; documented North American, UK and Australian fiction shapes are exempt, including a test number followed by a column delimiter and a valid ISO date/time. Extra fields and split real numbers stay RED.
 
 The full procedure, the boundaries and where the rules came from are in [SKILL.md](SKILL.md).
 
@@ -152,10 +153,10 @@ In this skill's Codex run, every call into the skill folder's scripts/ used that
 python3 scripts/publish_gate.py --selftest
 ```
 
-Standard library only, Python 3.9+. On 2026-10-01 every self-test above passed, and
+Standard library only, Python 3.9+. On 2026-10-07 every self-test above passed, and
 `breakcheck.py` from [nk-breakable-selftest](https://github.com/NickkkLian/nk-breakable-selftest) broke each script on purpose in a sandbox copy:
 
-- `publish_gate.py`: 20 lines broken one at a time; 15 turned the self-test red without a traceback. Not covered: the self-test stayed green with L207, L292, L313 switched off; switching off L202, L355 crashed the script instead of failing a sample, which does not count as caught.
+- `publish_gate.py`: 23 lines broken one at a time; 18 turned the self-test red without a traceback. Not covered: the self-test stayed green with L306, L391, L412 switched off; switching off L301, L454 crashed the script instead of failing a sample, which does not count as caught.
 
 The unmutated control stayed green every time. Only lines that record a finding, raise, or return a failing exit code
 were broken (the tool's pattern, or the hand-written list); a line number refers to the script as shipped in this version.

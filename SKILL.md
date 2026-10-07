@@ -3,8 +3,8 @@ name: nk-publish-gate
 description: "A privacy gate to run before anything goes public (a repo, a release zip, a demo folder, a PDF): it finds what is private but is not a secret, such as a home-directory path inside an xlsx, a username in a .pyc or a personal address in the commit history. Use when you are about to push to a public repository, make a private repo public, attach files to a post, or hand a bundle to someone outside. Scans every file regardless of extension, opens archives three levels deep (member names included), inflates PDF streams, scans binaries as bytes, and with --git-range scans every commit's author, message and blobs, because publishing a repo publishes its whole history. Your own identifiers come from a config kept outside every repo. For secrets it is a backstop: run a secret scanner such as gitleaks as well. Not a replacement for reading the screenshots yourself."
 license: MIT
 metadata:
-  provenance: own practice (2026-07 to 2026-09); no external source
-  version: 0.1.4
+  provenance: own practice (2026-07 to 2026-09); phone fiction reservations from NANPA, Ofcom and ACMA
+  version: 0.1.5
 ---
 # Publish gate
 
@@ -57,6 +57,18 @@ well. This gate is mostly about what is not a credential and still should not go
 - Your own identifiers from the config: handles, legal names, hostnames, private project names.
 - Phone numbers and e-mail addresses that are not the officially fictional ones.
 
+The phone rule covers international and separated North American forms (including a final full stop),
+leading-zero national forms with 10–12 digits, and bare 10/11-digit runs with a phone word in the preceding
+24 characters. Chinese national mobile shapes with 11 digits starting 13–19 are RED even without a phone
+word, including IDs with that shape; compact and 3-4-4 groups with a single space/dash are covered. Other bare
+ten-digit IDs stay clean without a phone word. Fiction exemptions are the existing North American 555-01xx
+and UK 07700 900xxx / 020 7946 0xxx shapes, plus ACMA's exact Australian mobiles/services and geographical
+ranges. A test number followed by a tab or two or more spaces and a valid ISO date (optionally a time) is
+accepted only as that complete shape; extra number fields or real numbers split across columns stay RED.
+Sources read 2026-10-07: [NANPA](https://nanpa.com/numbering/555-line-numbers),
+[Ofcom](https://www.ofcom.org.uk/phones-and-broadband/phone-numbers/numbers-for-drama),
+[ACMA](https://www.acma.gov.au/phone-numbers-use-tv-shows-films-and-creative-works).
+
 It also carries a short secret rule (fourteen key formats and `api_key = <long value>`-style assignments), and with
 `--git-range` it finds a secret that was committed and then deleted. That rule is a backstop, not a scanner.
 
@@ -76,4 +88,5 @@ It also carries a short secret rule (fourteen key formats and `api_key = <long v
 Own practice, 2026-07 to 2026-09. The rule set grew one incident at a time: seed data embedded in a
 public app template; a repo made public with its history still carrying account names and internal notes; a
 `.pyc` with a username that passed because the scan excluded cache directories; a stale README command;
-a personal address as commit author. Each of those is a self-test sample now. No external source.
+a personal address as commit author. Each of those is a self-test sample now. Phone-fiction reservations
+come from the official sources linked above.

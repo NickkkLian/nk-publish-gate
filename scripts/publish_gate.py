@@ -13,7 +13,8 @@ Built-in RED rules (no config needed):
   R04 home-directory and mount paths (macOS and Linux home dirs, private tmp, mounted volumes, a home Desktop)   R05 Windows user paths
   R07 secret shapes (Anthropic/OpenAI/GitHub/AWS/Slack/Google/Stripe/npm/GitLab/SendGrid/Twilio/Hugging Face keys, JWTs, PEM headers;
       a short list, not a secret scanner: run gitleaks or trufflehog as well)   R08 key/token/secret/password = <long value with digits> (placeholders excluded)
-  R09 phone numbers outside the officially fictional ranges (NA 555-01xx, UK 07700 900xxx / 020 7946 0xxx)
+  R09 international/separated, leading-zero national, phone-word bare and Chinese national phone shapes;
+      fiction: NA 555-01xx, UK 07700 900xxx / 020 7946 0xxx, exact ACMA mobiles/services and geographical ranges
   R10 e-mail addresses that are not example/invalid/noreply                         R12 cache dirs, .env, .DS_Store, *.pyc, *.log …
   R15 file >= 100 MB (GitHub rejects)                                                R17 (--git-range) author/committer not in allowed_author_emails
 Config rules (your own identifiers, from --config or $PUBLISH_GATE_CONFIG or ~/.config/publish-gate/gate.json):
@@ -57,7 +58,20 @@ BUILTIN_RED = [
 MASK_RULES = {"R07", "R08"}
 ASSIGNED = re.compile(r"\b(api[_-]?key|secret|token|passw(?:or)?d)\b\s*[:=]\s*['\"]?([A-Za-z0-9_\-]{20,})", re.I)
 PLACEHOLDER = re.compile(r"your|example|placeholder|xxx|change|replace|dummy|sample|test|redacted|insert", re.I)
-PHONES = [re.compile(r"\+\d[\d\s().-]{8,}\d"), re.compile(r"(?<![\w.+])\(?[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?![\w.])")]
+PHONES = [
+    re.compile(r"\+\d[\d\s().-]{8,}\d"),
+    re.compile(r"(?<![\w.+])\(?[2-9]\d{2}\)?[\s.-]?\d{3}[\s.-]?\d{4}(?!\w|\.\d)"),
+]
+# Leading-zero national forms: retain only 10--12 digits, excluding fiction.
+PHONE_NATIONAL0 = re.compile(r"(?<![\w.+])\(?0[1-9]\d{0,3}\)?(?:[\s.-]?\d{3,8}){1,2}(?!\w|\.\d)")
+NATIONAL0_DIGITS = (10, 12)
+# A bare nonzero 10/11-digit run requires a preceding phone word within 24 characters.
+PHONE_BARE_RUN = re.compile(r"(?<![\w.+])[1-9]\d{9,10}(?!\w|\.\d)")
+PHONE_WORD = re.compile(r"phone|\btel\b|mobile|\bcell\b|whatsapp|\bfax\b|\bsms\b|电话|手机|致电", re.I)
+PHONE_WORD_WINDOW = 24
+# Chinese national mobile shape: 11 digits starting 13--19, compact or 3-4-4.
+# Unconditional, including matching IDs; no fiction exemption for this shape.
+PHONE_CN_MOBILE = re.compile(r"(?<![\w.+])1[3-9]\d(?:[ -]?\d{4}){2}(?!\w|\.\d)")
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 EXAMPLE_MAIL = re.compile(r"@(?:[\w.-]*example[\w.-]*\.(?:com|org|net)|[\w.-]+\.(?:test|invalid|example|localhost)"
                           r"|users\.noreply\.github\.com)$|^noreply@", re.I)
@@ -70,9 +84,62 @@ CONFIG_RULES = [("identifiers", "U01", "personal identifier", False), ("legal_na
                 ("private_names", "U05", "private project name", False)]
 
 
+# ACMA, read 2026-10-07 (page last updated 2026-09-03):
+# https://www.acma.gov.au/phone-numbers-use-tv-shows-films-and-creative-works
+# Only these exact mobiles/services; geographical ranges are 02/03/07/08 + 5550/7010 + xxxx.
+AU_FICTION_MOBILES = frozenset({
+    "0491" "570006", "0491" "570156", "0491" "570157", "0491" "570158", "0491" "570159", "0491" "570110",
+    "0491" "570313", "0491" "570737", "0491" "571266", "0491" "571491", "0491" "571804", "0491" "572549",
+    "0491" "572665", "0491" "572983", "0491" "573770", "0491" "573087", "0491" "574118", "0491" "574632",
+    "0491" "575254", "0491" "575789", "0491" "576398", "0491" "576801", "0491" "577426", "0491" "577644",
+    "0491" "578957", "0491" "578148", "0491" "578888", "0491" "579212", "0491" "579760", "0491" "579455",
+})
+AU_FICTION_SERVICES = frozenset({
+    "1800" "160401", "1800" "975707", "1800" "975708", "1800" "975709", "1800" "975710", "1800" "975711",
+    "1300" "975707", "1300" "975708", "1300" "975709", "1300" "975710", "1300" "975711",
+})
+AU_FICTION_GEOGRAPHIC = re.compile(r"(?:0|61)[2378](?:5550|7010)\d{4}")
+TEST_PHONE_DATE = re.compile(
+    r"(?P<phone>[+\d().-]+(?: [+\d().-]+)*)(?P<delimiter>\t+| {2,})"
+    r"(?P<date>\d{4}-\d{2}-\d{2})(?: (?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?)?")
+
+
 def _is_test_number(digits):
-    return bool(re.fullmatch(r"1?\d{3}55501\d{2}", digits) or re.fullmatch(r"(?:44|0)7700900\d{3}", digits)
-                or re.fullmatch(r"(?:44|0)2079460\d{3}", digits))
+    au_national = "0" + digits[2:] if digits.startswith("61") else digits
+    au_service = digits[2:] if digits.startswith("61") else digits
+    return bool(re.fullmatch(r"1?\d{3}55501\d{2}", digits)
+                or re.fullmatch(r"(?:44|0)7700900\d{3}", digits)
+                or re.fullmatch(r"(?:44|0)2079460\d{3}", digits)
+                or au_national in AU_FICTION_MOBILES
+                or AU_FICTION_GEOGRAPHIC.fullmatch(digits)
+                or au_service in AU_FICTION_SERVICES)
+
+
+def _is_test_national0(digits):
+    """Fiction ranges for a number written with a leading 0. The North American clause of _is_test_number is left out
+    on purpose: no area code there starts with 0, and `\\d{3}55501\\d{2}` would accept real Australian mobiles
+    (the leading zero is not a North American area code)."""
+    return bool(re.fullmatch(r"0(?:7700900|2079460)\d{3}", digits)
+                or digits in AU_FICTION_MOBILES
+                or AU_FICTION_GEOGRAPHIC.fullmatch(digits))
+
+
+def _test_phone_date_span(line, match):
+    """One exception: exactly a test number, a column delimiter, and an ISO date/time."""
+    candidate = match.group(0)
+    # The original regex stops at ':' in a time. Include the remaining suffix only
+    # for this check; fullmatch rejects incomplete times or anything after the time.
+    if line[match.end():].startswith(":"):
+        candidate = line[match.start():]
+    dated = TEST_PHONE_DATE.fullmatch(candidate)
+    if not dated or not _is_test_number(re.sub(r"\D", "", dated.group("phone"))):
+        return None
+    try:
+        datetime.date.fromisoformat(dated.group("date"))
+    except ValueError:
+        return None
+    return (match.start(), match.end(), match.start() + dated.start("delimiter"),
+            match.start() + dated.start("date"))
 
 
 def load_config(path):
@@ -159,12 +226,44 @@ def scan_text(rules, res, where, text, inside):
             val = m.group(2)
             if sum(c.isdigit() for c in val) >= 3 and not PLACEHOLDER.search(val):
                 res.hit("R08", "assigned secret", where, i, line, val, span=m.span(2))
+        test_date_spans = []
+        judged = []                              # spans the two patterns above already judged (fiction, or reported)
         for rx in PHONES:
             for m in rx.finditer(line):
                 if m.group(0).isdigit():
                     continue
-                if not _is_test_number(re.sub(r"\D", "", m.group(0))):
+                judged.append(m.span())
+                dated = _test_phone_date_span(line, m)
+                if dated:
+                    test_date_spans.append(dated)
+                    continue
+                # Only the second pattern's hit across that same delimiter into the
+                # date may be skipped, wholly inside an explicitly excepted match.
+                if rx is PHONES[1] and any(start <= m.start() < delimiter and date < m.end() <= end
+                                          for start, end, delimiter, date in test_date_spans):
+                    continue
+                digits = re.sub(r"\D", "", m.group(0))
+                if not _is_test_number(digits):
                     res.hit("R09", "non-fictional phone number", where, i, line, m.group(0), span=m.span())
+        # Scan only the residual text for the new shapes; blank judged spans to
+        # avoid interpreting a fiction number's tail as another national number.
+        rest = list(line)
+        for a, b in judged:
+            rest[a:b] = "\x00" * (b - a)
+        rest = "".join(rest)
+        for m in PHONE_NATIONAL0.finditer(rest):
+            digits = re.sub(r"\D", "", m.group(0))
+            if NATIONAL0_DIGITS[0] <= len(digits) <= NATIONAL0_DIGITS[1] and not _is_test_national0(digits):
+                res.hit("R09", "non-fictional phone number", where, i, line, m.group(0), span=m.span())
+        for m in PHONE_CN_MOBILE.finditer(rest):
+            res.hit("R09", "non-fictional phone number", where, i, line, m.group(0), span=m.span())
+            # The phone-word branch would report the same compact number again.
+            # Blank only this reported span, retaining offsets and nearby words.
+            rest = rest[:m.start()] + "\x00" * (m.end() - m.start()) + rest[m.end():]
+        for m in PHONE_BARE_RUN.finditer(rest):
+            if (PHONE_WORD.search(rest[max(0, m.start() - PHONE_WORD_WINDOW):m.start()])
+                    and not _is_test_number(m.group(0))):
+                res.hit("R09", "non-fictional phone number", where, i, line, m.group(0), span=m.span())
         for m in EMAIL.finditer(line):
             if not EXAMPLE_MAIL.search(m.group(0)):
                 local, _, domain = m.group(0).partition("@")
@@ -388,6 +487,108 @@ SAMPLES = [  # (relative path, bytes, must hit, must not hit) — fragments join
     ("r09b.txt", b"call 604-1" b"23-4567 now", {"R09"}, set()),
     ("r09ok.txt", b"+1 202 555 0101 / 604-555-0199 / 020 7946 0123 / 07700 900123 / (202) 555-0199", set(), {"R09"}),
     ("r09c.txt", b"id 2147483648 view/9876543210 ts 1694745600", set(), {"R09"}),
+    # 0.1.5 phone cases: split literals keep synthetic RED examples out of the source scan.
+    ('r09r2nastop.txt', b'Call m' b'e at 6' b'04-123' b'-4567.', {'R09'}, set()),
+    ('r09r2nafictionstop.txt', b'Call 6' b'04-555' b'-0175.', set(), {'R09'}),
+    ('r09r2nadecimal.txt', b'value ' b'604-12' b'3-4567' b'.5', set(), {'R09'}),
+    ('r09r2natail.txt', b'token ' b'604-12' b'3-4567' b'x', set(), {'R09'}),
+    ('r09r2bare10.txt', b'id 604' b'123456' b'7 and ' b'138123' b'4567', set(), {'R09'}),
+    ('r09r2cnspace.txt', b'138 12' b'34 567' b'8', {'R09'}, set()),
+    ('r09r2cndash.txt', b'138-12' b'34-567' b'8', {'R09'}, set()),
+    ('r09r2cnbare.txt', b'138123' b'45678', {'R09'}, set()),
+    ('r09r2cnlow.txt', b'130 12' b'34 567' b'8', {'R09'}, set()),
+    ('r09r2cnhigh.txt', b'199 12' b'34 567' b'8', {'R09'}, set()),
+    ('r09r2cnid.txt', b'id: 13' b'812345' b'678', {'R09'}, set()),
+    ('r09r2cnnotna.txt', b'138555' b'50123', {'R09'}, set()),
+    ('r09r2cnword.txt', b'\xe6\x89\x8b\xe6\x9c\xba' b'\xef\xbc\x9a138' b'123456' b'78', {'R09'}, set()),
+    ('r09r2cnstop.txt', b'Call 1' b'38 123' b'4 5678' b'.', {'R09'}, set()),
+    ('r09r2cnprefix.txt', b'128123' b'45678 ' b'and 20' b'812345' b'678', set(), {'R09'}),
+    ('r09r2cnlength.txt', b'138123' b'4567 a' b'nd 138' b'123456' b'789', set(), {'R09'}),
+    ('r09r2cninside.txt', b'a13812' b'345678' b' ratio' b' 3.138' b'123456' b'78', set(), {'R09'}),
+    ('r09r2cntail.txt', b'138123' b'45678x' b' and 1' b'381234' b'5678.5', set(), {'R09'}),
+    ('r09r2cngroups.txt', b'138  1' b'234  5' b'678 an' b'd 138 ' b'123 45' b'678', set(), {'R09'}),
+    ('r09r2cnfictionbefore.txt', b'+1 385' b' 555 0' b'123 / ' b'138 12' b'34 567' b'8', {'R09'}, set()),
+    ('r09r2cnonlynafiction.txt', b'+1 385' b' 555 0' b'123', set(), {'R09'}),
+    ('r09tabok.csv', b'+1 (25' b'0) 555' b'-0175\t' b'\t2026-' b'09-16', set(), {'R09'}),
+    ('r09spaceok.txt', b'+1 (25' b'0) 555' b'-0175 ' b' 2026-' b'09-16', set(), {'R09'}),
+    ('r09auok.txt', b'+61 49' b'1 570 ' b'156', set(), {'R09'}),
+    ('r09aumobiles.txt', b'+61 49' b'1 570 ' b'006 / ' b'+61 49' b'1 570 ' b'156 / ' b'+61 49' b'1 570 ' b'157 / ' b'+61 49' b'1 570 ' b'158 / ' b'+61 49' b'1 570 ' b'159 / ' b'+61 49' b'1 570 ' b'110\n+6' b'1 491 ' b'570 31' b'3 / +6' b'1 491 ' b'570 73' b'7 / +6' b'1 491 ' b'571 26' b'6 / +6' b'1 491 ' b'571 49' b'1 / +6' b'1 491 ' b'571 80' b'4 / +6' b'1 491 ' b'572 54' b'9\n+61 ' b'491 57' b'2 665 ' b'/ +61 ' b'491 57' b'2 983 ' b'/ +61 ' b'491 57' b'3 770 ' b'/ +61 ' b'491 57' b'3 087 ' b'/ +61 ' b'491 57' b'4 118 ' b'/ +61 ' b'491 57' b'4 632\n' b'+61 49' b'1 575 ' b'254 / ' b'+61 49' b'1 575 ' b'789 / ' b'+61 49' b'1 576 ' b'398 / ' b'+61 49' b'1 576 ' b'801 / ' b'+61 49' b'1 577 ' b'426 / ' b'+61 49' b'1 577 ' b'644\n+6' b'1 491 ' b'578 95' b'7 / +6' b'1 491 ' b'578 14' b'8 / +6' b'1 491 ' b'578 88' b'8 / +6' b'1 491 ' b'579 21' b'2 / +6' b'1 491 ' b'579 76' b'0 / +6' b'1 491 ' b'579 45' b'5', set(), {'R09'}),
+    ('r09aureal.txt', b'+61 41' b'2 345 ' b'678', {'R09'}, set()),
+    ('r09aunear.txt', b'+61 49' b'1 570 ' b'155', {'R09'}, set()),
+    ('r09tabreal.csv', b'+1 (25' b'0) 234' b'-0175\t' b'\t2026-' b'09-16', {'R09'}, set()),
+    ('r09tab555.csv', b'+1 (25' b'0) 555' b'-0275\t' b'\t2026-' b'09-16', {'R09'}, set()),
+    ('r09space555.txt', b'+1 (25' b'0) 555' b'-0275 ' b' 2026-' b'09-16', {'R09'}, set()),
+    ('r09tabshort.txt', b'+123\t4' b'567890' b'12', {'R09'}, set()),
+    ('r09tabtwo.txt', b'+1 (25' b'0) 555' b'-0175\t' b'\t+61 4' b'12 345' b' 678', {'R09'}, set()),
+    ('r09spacetwo.txt', b'+1 (25' b'0) 555' b'-0175 ' b' 604-1' b'23-456' b'7', {'R09'}, set()),
+    ('r09ausuffix.txt', b'+61 49' b'1 570 ' b'156  0' b'412 34' b'5 678', {'R09'}, set()),
+    ('r09natabsuffix.txt', b'+1 (25' b'0) 555' b'-0175\t' b'\t0412 ' b'345 67' b'8', {'R09'}, set()),
+    ('r09uksuffix.txt', b'+44 77' b'00 900' b'123  0' b'20 712' b'3 4567', {'R09'}, set()),
+    ('r09nasuffix.txt', b'+1 (25' b'0) 555' b'-0175\t' b'\t604 1' b'23 456' b'7', {'R09'}, set()),
+    ('r09autabdate.txt', b'+61 49' b'1 570 ' b'156\t20' b'26-09-' b'16', set(), {'R09'}),
+    ('r09autimedate.txt', b'+61 49' b'1 570 ' b'156  2' b'026-09' b'-16 10' b':30', set(), {'R09'}),
+    ('r09suffixdigits.txt', b'+61 49' b'1 570 ' b'156\t04' b'123456' b'78', {'R09'}, set()),
+    ('r09suffixmany.txt', b'+61 49' b'1 570 ' b'156  0' b'412 34' b'5 678\t' b'020 71' b'23 456' b'7  604' b' 123 4' b'567', {'R09'}, set()),
+    ('r09suffixfiction.txt', b'+61 49' b'1 570 ' b'156\t04' b'91 570' b' 157\t2' b'026-09' b'-16', {'R09'}, set()),
+    ('r09splitarea.txt', b'+1 (25' b'0) 555' b'-0175\t' b'604\t12' b'3-4567', {'R09'}, set()),
+    ('r09splitlocal.txt', b'+1 (25' b'0) 555' b'-0175\t' b'604 12' b'3\t4567', {'R09'}, set()),
+    ('r09splitbare.txt', b'x 604\t' b'123-45' b'67', {'R09'}, set()),
+    ('r09splitintl.txt', b'+1 604' b'\t123\t4' b'567', {'R09'}, set()),
+    ('r09suffixnine.txt', b'+61 49' b'1 570 ' b'156\t41' b'2 345 ' b'6789', {'R09'}, set()),
+    ('r09datereal.txt', b'+1 (25' b'0) 555' b'-0175\t' b'\t2026-' b'09-16\t' b'604-12' b'3-4567', {'R09'}, set()),
+    ('r09datenoise.txt', b'+1 (25' b'0) 555' b'-0175 ' b' 99 20' b'26-09-' b'16 416' b'123456' b'7', {'R09'}, set()),
+    ('r09timereal.txt', b'+61 49' b'1 570 ' b'156  2' b'026-09' b'-16 10' b':30\t04' b'12 345' b' 678', {'R09'}, set()),
+    ('r09dateinvalid.txt', b'+61 49' b'1 570 ' b'156\t20' b'26-02-' b'30', {'R09'}, set()),
+    ('r09timeinvalid.txt', b'+61 49' b'1 570 ' b'156  2' b'026-09' b'-16 25' b':30', {'R09'}, set()),
+    ('r09augeo.txt', b'+61 2 ' b'5550 0' b'000 / ' b'+61 2 ' b'5550 9' b'999 / ' b'+61 2 ' b'7010 0' b'000 / ' b'+61 2 ' b'7010 9' b'999\n+6' b'1 3 55' b'50 000' b'0 / +6' b'1 3 55' b'50 999' b'9 / +6' b'1 3 70' b'10 000' b'0 / +6' b'1 3 70' b'10 999' b'9\n+61 ' b'7 5550' b' 0000 ' b'/ +61 ' b'7 5550' b' 9999 ' b'/ +61 ' b'7 7010' b' 0000 ' b'/ +61 ' b'7 7010' b' 9999\n' b'+61 8 ' b'5550 0' b'000 / ' b'+61 8 ' b'5550 9' b'999 / ' b'+61 8 ' b'7010 0' b'000 / ' b'+61 8 ' b'7010 9' b'999', set(), {'R09'}),
+    ('r09augeonear.txt', b'+61 2 ' b'5551 1' b'234\n+6' b'1 3 70' b'11 123' b'4\n+61 ' b'7 5540' b' 1234\n' b'+61 8 ' b'7000 1' b'234', {'R09'}, set()),
+    ('r09auservice.txt', b'+61 18' b'00 160' b' 401 /' b' +61 1' b'800 97' b'5 707 ' b'/ +61 ' b'1800 9' b'75 708' b' / +61' b' 1800 ' b'975 70' b'9 / +6' b'1 1800' b' 975 7' b'10 / +' b'61 180' b'0 975 ' b'711\n+6' b'1 1300' b' 975 7' b'07 / +' b'61 130' b'0 975 ' b'708 / ' b'+61 13' b'00 975' b' 709 /' b' +61 1' b'300 97' b'5 710 ' b'/ +61 ' b'1300 9' b'75 711', set(), {'R09'}),
+    ('r09auservicenear.txt', b'+61 18' b'00 975' b' 706\n+' b'61 130' b'0 975 ' b'712', {'R09'}, set()),
+    ('r09n0aumobile.txt', b'0412 3' b'45 678', {'R09'}, set()),
+    ('r09n0uk.txt', b'020 71' b'23 456' b'7', {'R09'}, set()),
+    ('r09n0dash.txt', b'ring 0' b'412-34' b'5-678 ' b'after ' b'six', {'R09'}, set()),
+    ('r09n0dot.txt', b'ring 0' b'412.34' b'5.678 ' b'after ' b'six', {'R09'}, set()),
+    ('r09n0tab.txt', b'ring 0' b'412\t34' b'5\t678 ' b'after ' b'six', {'R09'}, set()),
+    ('r09n0bareau.txt', b'ring 0' b'412345' b'678 af' b'ter si' b'x', {'R09'}, set()),
+    ('r09n0bareuk.txt', b'ring 0' b'207123' b'4567 a' b'fter s' b'ix', {'R09'}, set()),
+    ('r09n0brackets.txt', b'(02) 9' b'123 45' b'67', {'R09'}, set()),
+    ('r09n0ukmobile.txt', b'07911 ' b'123456', {'R09'}, set()),
+    ('r09n0twelve.txt', b'0755-1' b'234 56' b'78', {'R09'}, set()),
+    ('r09n0stop.txt', b'Call 0' b'412 34' b'5 678.', {'R09'}, set()),
+    ('r09n0afterfiction.txt', b'(202) ' b'555-01' b'01 041' b'2 345 ' b'678', {'R09'}, set()),
+    ('r09n0notna.txt', b'0415 5' b'50 112', {'R09'}, set()),
+    ('r09n0fictionau.txt', b'0491 5' b'70 156' b' / 049' b'157015' b'6 / 02' b' 5550 ' b'1234 /' b' (03) ' b'7010 0' b'000 / ' b'087010' b'0000', set(), {'R09'}),
+    ('r09n0fictionuk.txt', b'020 79' b'46 012' b'3 / 02' b'079460' b'123 / ' b'07700 ' b'900123' b' / 077' b'009001' b'23', set(), {'R09'}),
+    ('r09n0fictiontail.txt', b'(250) ' b'555-01' b'75\t604' b'-555-0' b'199', set(), {'R09'}),
+    ('r09n0nine.txt', b'x 04 1' b'23 456' b'7', set(), {'R09'}),
+    ('r09n0fourteen.txt', b'x 0123' b' 45678' b' 90123', set(), {'R09'}),
+    ('r09n0zeros.txt', b'id 000' b'000000' b'0 uuid' b' 00000' b'000-00' b'00-400' b'0-8000' b'-00000' b'000000' b'1 pad ' b'0012 3' b'45 678', set(), {'R09'}),
+    ('r09n0inside.txt', b'sha a0' b'412345' b'678 ra' b'tio 3.' b'041234' b'5678', set(), {'R09'}),
+    ('r09n0tail.txt', b'041234' b'5678x ' b'and 04' b'123456' b'78.5', set(), {'R09'}),
+    ('r09barephone.txt', b'phone:' b' 60412' b'34567', {'R09'}, set()),
+    ('r09baretel.txt', b'<a hre' b'f="tel' b':60412' b'34567"' b'>', {'R09'}, set()),
+    ('r09barecjk.txt', b'\xe6\x89\x8b\xe6\x9c\xba' b' 60412' b'34567', {'R09'}, set()),
+    ('r09baremobile.txt', b'mobile' b' 60412' b'34567', {'R09'}, set()),
+    ('r09barecell.txt', b'cell: ' b'604123' b'4567', {'R09'}, set()),
+    ('r09barewhatsapp.txt', b'WhatsA' b'pp 604' b'123456' b'7', {'R09'}, set()),
+    ('r09barefax.txt', b'fax 60' b'412345' b'67', {'R09'}, set()),
+    ('r09baresms.txt', b'SMS 60' b'412345' b'67', {'R09'}, set()),
+    ('r09baredianhua.txt', b'\xe7\x94\xb5\xe8\xaf\x9d' b'\xef\xbc\x9a604' b'123456' b'7', {'R09'}, set()),
+    ('r09barezhidian.txt', b'\xe8\x87\xb4\xe7\x94\xb5' b' 60412' b'34567', {'R09'}, set()),
+    ('r09barefiction.txt', b'phone:' b' 60455' b'50134', set(), {'R09'}),
+    ('r09bareeleven.txt', b'\xe6\x89\x8b\xe6\x9c\xba' b'\xef\xbc\x9a138' b'123456' b'78', {'R09'}, set()),
+    ('r09barelength.txt', b'phone:' b' 12345' b'6789 a' b'nd pho' b'ne: 12' b'345678' b'9012', set(), {'R09'}),
+    ('r09barefar.txt', b'phone ' b'number' b's are ' b'kept i' b'n a li' b'st; ro' b'w 6041' b'234567', set(), {'R09'}),
+    ('r09baretail.txt', b'phone ' b'604123' b'4567x ' b'and ph' b'one 60' b'412345' b'67.5 a' b'nd pho' b'ne a60' b'412345' b'67', set(), {'R09'}),
+    ('r09bare11other.txt', b'tel: 1' b'204123' b'4567', {'R09'}, set()),
+    ('r09bare24.txt', b'phone ' b'      ' b'      ' b'      ' b'604123' b'4567', {'R09'}, set()),
+    ('r09bare25.txt', b'phone ' b'      ' b'      ' b'      ' b' 60412' b'34567', set(), {'R09'}),
+    ('r09singlespacedate.txt', b'+61 49' b'1 570 ' b'156 20' b'26-09-' b'16', {'R09'}, set()),
+    ('r09dateclockseconds.txt', b'+61 49' b'1 570 ' b'156  2' b'026-09' b'-16 10' b':30:45', set(), {'R09'}),
+    ('r09dateinvalidclock.txt', b'+61 49' b'1 570 ' b'156  2' b'026-09' b'-16 10' b':61', {'R09'}, set()),
+    ('r09datejunk.txt', b'+61 49' b'1 570 ' b'156  2' b'026-09' b'-16 10' b':30 ex' b'tra', {'R09'}, set()),
+    ('r09dateoutside.txt', b'+61 49' b'1 570 ' b'156\t20' b'26-09-' b'16 / 6' b'04-123' b'-4567', {'R09'}, set()),
+    ('r09aurealdate.txt', b'+61 41' b'2 345 ' b'678\t20' b'26-09-' b'16', {'R09'}, set()),
     ("r10.txt", b"mail bob@" b"realcompany.co", {"R10"}, set()),
     ("r10ok.txt", b"a@example.com b@adapter.invalid 12345+janed@users.noreply.github.com noreply@anthropic.com", set(), {"R10"}),
     ("__pycache__/x.pyc", b"\x00cache", {"R12"}, set()),
@@ -436,6 +637,17 @@ def selftest():
                 check(r in got, f"{rel} hits {r} (got {sorted(got)})")
             for r in must_not:
                 check(r not in got, f"{rel} does not hit {r} (got {sorted(got)})")
+            if "R09" in must and len(data_lines := next(data for name, data, _, _ in SAMPLES if name == rel).splitlines()) > 1:
+                for line_no in range(1, len(data_lines) + 1):
+                    check(any(h["where"] == rel and h["line"] == line_no and h["rule"] == "R09" for h in res.red),
+                          f"{rel}:{line_no} hits R09 independently")
+        cn_word = [h for h in res.red if h["where"] == "r09r2cnword.txt" and h["rule"] == "R09"]
+        check(len(cn_word) == 1, "r09r2cnword.txt Chinese phone is reported once")
+        # Preserve whole-match reporting for real numbers split across columns.
+        split_data = next(data for rel, data, _, _ in SAMPLES if rel == "r09splitarea.txt")
+        check(any(h["where"] == "r09splitarea.txt" and h["rule"] == "R09"
+                  and h["match"] == split_data.decode() for h in res.red),
+              "r09splitarea.txt retains the whole run-on match")
         check("R12" in by_where.get("__pycache__/", set()), "__pycache__/ directory itself is R12")
         check(exit_code(res) == 1, "a scan with RED hits exits 1")
         xl = {rec["rule"] for rec in res.red if rec["where"].startswith("book.xlsx")}
