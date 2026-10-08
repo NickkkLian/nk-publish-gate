@@ -169,6 +169,10 @@ This shows those lines are covered. It does not show that nothing else can fail.
 - Rules are regular expressions: a name spelled differently passes.
 - It does not judge whether the *existence* of a file should be public. That question is yours.
 
+## Privacy
+
+This skill's script runs on your computer, started by you or by the agent you use it in. It reads the files in the folder you name (with `--git-range`, also the commits in that range) and, if you made one, your config file of your own names and addresses; it prints what it finds, including the matched text, and writes a file only when you ask for one (`--json`, `--init-config`). The script opens no network connection and keeps nothing; what it prints is read by the agent you run it in, as part of your session with that agent. Questions: open an issue on this repository.
+
 ## License
 
 MIT. Read a script before letting it run in your environment.
