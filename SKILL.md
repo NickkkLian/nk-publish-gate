@@ -4,7 +4,7 @@ description: "A privacy gate to run before anything goes public (a repo, a relea
 license: MIT
 metadata:
   provenance: own practice (2026-07 to 2026-09); phone fiction reservations from NANPA, Ofcom and ACMA
-  version: 0.1.5
+  version: 0.1.6
 ---
 # Publish gate
 

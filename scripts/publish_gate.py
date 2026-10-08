@@ -713,16 +713,14 @@ def selftest():
         check(not res.red and res.n_files == 1, f"clean directory: 0 RED ({res.n_files} file scanned)")
         check(exit_code(res) == 0, "a scan with no RED hit exits 0")
     with tempfile.TemporaryDirectory() as d:
-        def g(*a, env=None):
-            e = dict(os.environ, GIT_AUTHOR_NAME="j", GIT_AUTHOR_EMAIL="12345+janed@users.noreply.github.com",
-                     GIT_COMMITTER_NAME="j", GIT_COMMITTER_EMAIL="12345+janed@users.noreply.github.com")
-            e.update(env or {})
-            subprocess.run(["git", "-C", d, *a], check=True, capture_output=True, env=e)
+        def g(*a):   # the identity goes in through git's own options, not through a copy of the environment
+            subprocess.run(["git", "-C", d, "-c", "user.name=j", "-c", "user.email=12345+janed@users.noreply.github.com", *a],
+                           check=True, capture_output=True)
         g("init", "-q"); open(os.path.join(d, "k.txt"), "w").write("token = 'ghp_abcdefghij" "klmnopqrstuvwxyz1234'\n")
         g("add", "k.txt"); g("commit", "-q", "-m", "add key")
         os.remove(os.path.join(d, "k.txt")); g("rm", "-q", "k.txt"); g("commit", "-q", "-m", "remove key")
         open(os.path.join(d, "n.txt"), "w").write("clean\n"); g("add", "n.txt")
-        g("commit", "-q", "-m", "note", env={"GIT_AUTHOR_EMAIL": "jane@" "gmail.com"})
+        g("commit", "-q", "-m", "note", "--author=j <jane@" "gmail.com>")
         res = Result([]); n_c, n_b = scan_git_range(rules, d, "HEAD", res)
         rules_hits = {r["rule"] for r in res.red}
         check(n_c == 3 and n_b == 2, f"range covered 3 commits / 2 blobs (got {n_c}/{n_b})")

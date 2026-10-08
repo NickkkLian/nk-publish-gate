@@ -1,7 +1,7 @@
 {
   "name": "nk-publish-gate",
   "description": "A privacy gate to run before anything goes public (a repo, a release zip, a demo folder, a PDF): it finds what is private but is not a secret, such as a home-directory path inside an xlsx, a username in a .pyc or a personal address in the commit history.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "author": {
     "name": "Nick Lian",
     "url": "https://github.com/NickkkLian"

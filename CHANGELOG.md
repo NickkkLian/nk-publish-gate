@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6 — 2026-10-08
+
+- Add the listing icon for plugin directories (`.claude-plugin/icon.png`).
+- The self-test's throwaway git repository gets its author through git's own options (`-c user.email`,
+  `--author`) instead of a copy of the process environment. The rules and what the gate prints are unchanged.
+
 ## 0.1.5 — 2026-10-07
 
 - Extend R09 with leading-zero national forms, phone-word bare 10/11-digit runs, and unconditional
