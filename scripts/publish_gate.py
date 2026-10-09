@@ -11,15 +11,23 @@ shares scan_tree / scan_git_range with the real run, and aborts everything if it
 
 Built-in RED rules (no config needed):
   R04 home-directory and mount paths (macOS and Linux home dirs, private tmp, mounted volumes, a home Desktop)   R05 Windows user paths
+      (0.1.7: a home path whose whole user folder name is a stand-in, see STANDIN_USERS, is a NOTE; a drive-letter path
+      written with forward slashes is reported once, by R05, unless an allow entry covers the R05 finding)
   R07 secret shapes (Anthropic/OpenAI/GitHub/AWS/Slack/Google/Stripe/npm/GitLab/SendGrid/Twilio/Hugging Face keys, JWTs, PEM headers;
       a short list, not a secret scanner: run gitleaks or trufflehog as well)   R08 key/token/secret/password = <long value with digits> (placeholders excluded)
   R09 international/separated, leading-zero national, phone-word bare and Chinese national phone shapes;
       fiction: NA 555-01xx, UK 07700 900xxx / 020 7946 0xxx, exact ACMA mobiles/services and geographical ranges
-  R10 e-mail addresses that are not example/invalid/noreply                         R12 cache dirs, .env, .DS_Store, *.pyc, *.log …
+      (0.1.7: a number written with +1 and area code 555 is a NOTE: that area code is not assignable)
+  R10 e-mail addresses that are not example/invalid/noreply (0.1.7: a package name, an @ and a version number are not an
+      address; each is a NOTE record, printed as one line per file with the count; an @ followed by four numbers stays
+      RED; an address whose two sides are both stand-ins, see STANDIN_MAIL_LOCAL and STANDIN_MAIL_DOMAIN, is a NOTE)                       R12 cache dirs, .env, .DS_Store, *.pyc, *.log …
   R15 file >= 100 MB (GitHub rejects)                                                R17 (--git-range) author/committer not in allowed_author_emails
 Config rules (your own identifiers, from --config or $PUBLISH_GATE_CONFIG or ~/.config/publish-gate/gate.json):
   U01 identifiers (handles, private mailbox names)  U02 legal names  U03 personal URLs  U04 usernames/hostnames  U05 private project names
-NOTE (listed, never red): R13 AI tool names inside archives/binaries · R14 non-Latin scripts (only with --note-scripts) · R15 file >= 50 MB · R16 images (a machine cannot read a screenshot: look at them)
+NOTE (listed, never red): R04/R05 home paths with a stand-in user · R09 +1 numbers in area code 555 · R10 name@version counts and stand-in addresses · R13 AI tool names inside archives/binaries · R14 non-Latin scripts (only with --note-scripts) · R15 file >= 50 MB · R16 images (a machine cannot read a screenshot: look at them)
+Repeats (0.1.7): the same e-mail address, the same phone digits or the same home-path user folder is printed as one RED line with
+its count and its first place; the name@version NOTEs of one file are one line. The exit code, the verdict and --json are not
+affected: --json lists every place and every string.
 Archives (PK header: zip/xlsx/docx/pptx/jar) are opened up to 3 levels, member names included; PDF Flate streams are inflated and
 scanned as text; binaries are scanned as bytes; every file is looked at regardless of extension; anything unreadable is listed as UNSCANNED.
 --git-range: every commit in the range (e.g. origin/main..HEAD, or HEAD for all history) has its author/committer, message, and every
@@ -82,6 +90,111 @@ CONFIG_TEMPLATE = {"identifiers": [], "legal_names": [], "urls": [], "usernames"
 CONFIG_RULES = [("identifiers", "U01", "personal identifier", False), ("legal_names", "U02", "legal name", True),
                 ("urls", "U03", "personal URL", False), ("usernames", "U04", "username/hostname", True),
                 ("private_names", "U05", "private project name", False)]
+
+# 0.1.7. A home path is a NOTE, not RED, when its user folder name is, as a whole, one of these words (or three dots,
+# or a name in angle brackets). The whole name is judged: it runs to the next path separator, spaces included, so a
+# profile folder made of a first name and a surname is never judged by its first word. A single character is not a
+# stand-in. This is the whole list, and it is short on purpose; any other name is RED, invented ones such as jane
+# included, because the gate cannot tell an invented name from a real one. A real account whose name is exactly one of
+# these words is a NOTE too: if that is yours, put it in the config (`usernames`), which is RED wherever it appears.
+STANDIN_USERS = {"user", "username", "yourusername", "you", "name", "me", "dev", "node"}
+# 0.1.7. An e-mail address is a NOTE only when BOTH sides are stand-ins: the part before the @ is in the first list and
+# the domain is in the second. Each list is short on purpose and holds no mail provider and no company that sells
+# anything under that name: every other address stays RED.
+STANDIN_MAIL_LOCAL = {"user", "test", "name", "you", "your", "your-email", "email", "foo", "bar", "john.doe", "jane.doe",
+                      "firstname.lastname", "a", "b"}
+STANDIN_MAIL_DOMAIN = {"company.com", "yourcompany.com", "yourdomain.com", "yourapp.com", "acme.com", "contoso.com",
+                       "test.com", "tenant.com", "b.com", "bar.com", "attacker.com", "evil.com"}
+# 0.1.7. Area code 555 is not assignable (NANPA NPA Database, read 2026-10-08: the row for 555 says ASSIGNABLE No;
+# reports.nanpa.com/public/npa_report.csv). A number written with the country code +1 and that area code is therefore
+# a NOTE. A NOTE is not proof that the number belongs to nobody. Only that shape: the + and the 1 must be written, and
+# the match must be exactly eleven digits. Ten digits starting 555 with no country code stay RED (another country's
+# national number can look like that), and so does 555 in the middle (a real area code followed by 555).
+AREA_555 = re.compile(r"1555\d{7}")
+VALUE_RULES = {"R04", "R05", "R09", "R10"}       # rules whose finding is a value; repeats of one value print as one line
+USER_PART = re.compile(r"[\\\x2f]*(<[^<>\\\x2f\n]{0,40}>?|\.{3}|\u2026|[^\\\x2f\s\"'`)(\]\[,;:|&=#]*)")
+# the rest of a folder name that has spaces in it: words that run on, with no space before the next path separator
+NAME_MORE = re.compile(r"((?:[ \t]+[^\x00-\x20\\\x2f\"'`<>|]+)+)[\\\x2f]")
+NAME_TAIL = re.compile(r"[^\x00-\x20\\\x2f\"'`)(\]\[,;:|&=#]*")
+ANGLE_NAME = re.compile(r"<[^<>]*>")
+MAIL_EDGE = set(" \t<>()[]{}\"'`,;:=|\\\x2f")   # what may stand right before an address that is judged as a stand-in
+HOME_LINUX = re.compile(r"\x2fhome\x2f[a-z]")
+VERSION_START = re.compile(r"\d")
+
+
+def _home_user(rid, matched, after):
+    """The user part of a home path, as written; None when the match is not a home path at all (a mounted volume, a tmp
+    folder, a home Desktop, an entry of extra_local_paths). `after` is the text that follows the match."""
+    if rid == "R04":
+        if HOME_LINUX.fullmatch(matched):
+            after = matched[-1] + after          # the rule's own match already holds the name's first letter
+        elif matched != "\x2fUsers\x2f":
+            return None
+    elif rid != "R05":
+        return None
+    m = USER_PART.match(after)
+    part = m.group(1) + NAME_TAIL.match(after, m.end()).group(0)     # the whole name, to the next separator or the end of the word
+    more = NAME_MORE.match(after, m.start(1) + len(part))
+    if more:                                     # a folder name with spaces: it is one name, and it is judged whole
+        part += more.group(1)
+    return part
+
+
+def _standin_user(rid, matched, after):
+    """The user part of a home path when it is a stand-in; None when it is a name, or not a home path."""
+    part = _home_user(rid, matched, after)
+    if part is None:
+        return None
+    if part in ("...", "\u2026") or ANGLE_NAME.fullmatch(part):
+        return part
+    name = part.rstrip(".!?")                    # the full stop of a sentence that ends on the path
+    return name if name.lower() in STANDIN_USERS else None
+
+
+def _standin_shown(matched, standin):
+    return (matched[:-1] if HOME_LINUX.fullmatch(matched) else matched) + standin
+
+
+def _is_version(domain):
+    """True when the part after the @ is a version and not a domain: it starts with a number, a dot and a digit, and
+    its last part has a digit in it (no top-level domain does). An @ followed by four numbers is an IP address, as in
+    a login to a machine, whatever follows the fourth number: it stays an address. Three numbers or fewer cannot be
+    told from a version."""
+    parts = domain.split(".")
+    if len(parts) >= 4 and all(x.isdigit() for x in parts[:3]) and VERSION_START.match(parts[3]):
+        return False
+    return parts[0].isdigit() and bool(VERSION_START.match(parts[1])) and any(c.isdigit() for c in parts[-1])
+
+
+def _inside(span, spans):
+    return any(a <= span[0] and span[1] <= b for a, b in spans)
+
+
+def _phone_value(matched):
+    """The digits, exactly as written: two numbers are the same value only when every digit is the same."""
+    return re.sub(r"\D", "", matched)
+
+
+def printed(rows):
+    """A list as it is printed: [record, count, files] per line. Records that carry the same value under the same rule
+    and label are one line (the first place, with the count); every other record is its own line. The value is the
+    whole e-mail address, the phone digits or the whole user folder name, each exactly as written; for a name@version
+    NOTE it is the file, so one file is one line."""
+    out, at = [], {}
+    for r in rows:
+        key = (r["rule"], r["label"], r.get("_value"))
+        if r.get("_value") is not None and key in at:
+            at[key][1] += 1; at[key][2].add(r["where"].split("::")[0])
+        else:
+            out.append([r, 1, {r["where"].split("::")[0]}])
+            if r.get("_value") is not None:
+                at[key] = out[-1]
+    return out
+
+
+def public(rows):
+    """Records as --json writes them: without the grouping value, so the file is the same as before 0.1.7."""
+    return [{k: v for k, v in r.items() if k != "_value"} for r in rows]
 
 
 # ACMA, read 2026-10-07 (page last updated 2026-09-03):
@@ -165,6 +278,8 @@ class Rules:
                 red.append((rid, label, rx, re.I))
         self.text = [(rid, label, re.compile(rx, fl)) for rid, label, rx, fl in red]
         self.bytes = [(rid, label, re.compile(rx.encode("utf-8"), fl)) for rid, label, rx, fl in red]
+        self.r05 = next(rx for rid, _, rx in self.text if rid == "R05")
+        self.r05_b = next(rx for rid, _, rx in self.bytes if rid == "R05")
         self.tool_b = re.compile(TOOL_RESIDUE.pattern.encode("utf-8"), re.I)
         self.authors = set(cfg.get("allowed_author_emails", []))
         self.note_scripts = note_scripts
@@ -193,7 +308,7 @@ class Result:
                 return (",".join(sorted(rules_ok)) + "::" if rules_ok else "") + f"{glob}::{rx.pattern}"
         return None
 
-    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None):
+    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None, value=None):
         """Record a hit. `span` is where the match sits in `allow_text` (default: `line_text`); callers that know it pass
         it, so a second occurrence of the same text is judged on its own. Returns the list it went to."""
         shown = matched[:6] + "…" + f"({len(matched)} chars)" if rule in MASK_RULES else matched
@@ -204,7 +319,13 @@ class Result:
             excerpt = excerpt.replace(matched, shown)
         rec = {"rule": rule, "label": label, "where": where, "line": line_no, "match": shown, "excerpt": excerpt}
         if tier == "NOTE":
+            if value is not None:
+                rec["_value"] = value
             self.note.append(rec); return "note"
+        if rule == "R09":
+            value = _phone_value(matched)
+        if value is not None and rule in VALUE_RULES:
+            rec["_value"] = value                # what printed() groups by; never written to --json
         text = line_text if allow_text is None else allow_text
         if span is None:
             pos = text.find(matched) if matched else -1
@@ -218,21 +339,32 @@ class Result:
 def scan_text(rules, res, where, text, inside):
     lines = text.splitlines() or [""]
     for i, line in enumerate(lines, 1):
+        # a drive-letter path with forward slashes is R05's finding; R04 keeps quiet there only while R05 itself speaks
+        drive = [m.span() for m in rules.r05.finditer(line) if not res.allowed_by("R05", where, line, m.span())]
         for rid, label, rx in rules.text:
             for m in rx.finditer(line):          # every match: a first one that is allowed must not hide the next
-                if m.group(0):
-                    res.hit(rid, label, where, i, line, m.group(0), span=m.span())
+                if not m.group(0) or (rid == "R04" and _inside(m.span(), drive)):
+                    continue                     # a drive-letter path with forward slashes is R05's, reported once
+                after = line[m.end():m.end() + 96]
+                standin = _standin_user(rid, m.group(0), after)
+                if standin is not None:
+                    res.hit(rid, label + ", stand-in user", where, i, line, _standin_shown(m.group(0), standin), tier="NOTE")
+                else:
+                    res.hit(rid, label, where, i, line, m.group(0), span=m.span(), value=_home_user(rid, m.group(0), after) or None)
         for m in ASSIGNED.finditer(line):
             val = m.group(2)
             if sum(c.isdigit() for c in val) >= 3 and not PLACEHOLDER.search(val):
                 res.hit("R08", "assigned secret", where, i, line, val, span=m.span(2))
         test_date_spans = []
         judged = []                              # spans the two patterns above already judged (fiction, or reported)
+        area_555 = []                            # spans of +1 numbers in area code 555 (NOTE)
         for rx in PHONES:
             for m in rx.finditer(line):
                 if m.group(0).isdigit():
                     continue
                 judged.append(m.span())
+                if rx is PHONES[1] and _inside(m.span(), area_555):   # the same number again, without its +1: a NOTE as well
+                    res.hit("R09", "+1 number in area code 555 (not assignable)", where, i, line, m.group(0), tier="NOTE"); continue
                 dated = _test_phone_date_span(line, m)
                 if dated:
                     test_date_spans.append(dated)
@@ -243,7 +375,12 @@ def scan_text(rules, res, where, text, inside):
                                           for start, end, delimiter, date in test_date_spans):
                     continue
                 digits = re.sub(r"\D", "", m.group(0))
-                if not _is_test_number(digits):
+                if _is_test_number(digits):
+                    continue
+                if m.group(0).startswith("+") and AREA_555.fullmatch(digits):
+                    area_555.append(m.span())
+                    res.hit("R09", "+1 number in area code 555 (not assignable)", where, i, line, m.group(0), tier="NOTE")
+                else:
                     res.hit("R09", "non-fictional phone number", where, i, line, m.group(0), span=m.span())
         # Scan only the residual text for the new shapes; blank judged spans to
         # avoid interpreting a fiction number's tail as another national number.
@@ -267,7 +404,12 @@ def scan_text(rules, res, where, text, inside):
         for m in EMAIL.finditer(line):
             if not EXAMPLE_MAIL.search(m.group(0)):
                 local, _, domain = m.group(0).partition("@")
-                res.hit("R10", "non-example e-mail", where, i, line, local[:1] + "***@" + domain, span=m.span())
+                if _is_version(domain):          # one NOTE record per string; printed() folds a file's records into one line
+                    res.hit("R10", "name@version, not an e-mail address", where, i, line, m.group(0), tier="NOTE", value=where); continue
+                whole = m.start() == 0 or line[m.start() - 1] in MAIL_EDGE   # else the part before the @ is longer than the match
+                if whole and local.lower() in STANDIN_MAIL_LOCAL and domain.lower() in STANDIN_MAIL_DOMAIN:
+                    res.hit("R10", "e-mail, stand-in name at a stand-in domain", where, i, line, m.group(0), tier="NOTE"); continue
+                res.hit("R10", "non-example e-mail", where, i, line, local[:1] + "***@" + domain, span=m.span(), value=m.group(0))
         if inside:
             m = TOOL_RESIDUE.search(line)
             if m:
@@ -283,22 +425,32 @@ BIN_LISTED = 20         # allowed occurrences listed per rule and file; the rest
 
 def scan_bytes(rules, res, where, data):
     """Every occurrence of a rule in a binary is judged on its own. The first one that is not allowed makes the file
-    RED for that rule (later ones would not change that, so they are not listed); allowed ones are listed up to
-    BIN_LISTED and after that only checked. The window is decoded as UTF-8 with undecodable bytes kept as escapes,
+    RED for that rule (later ones would not change that, so they are not listed); allowed ones, and home paths with a
+    stand-in user (NOTE), are listed up to BIN_LISTED and after that only checked. The window is decoded as UTF-8 with undecodable bytes kept as escapes,
     so an allow REGEX written in any script matches the same text it would match in a text file."""
+    def window_of(m):
+        lo = max(0, m.start() - BIN_WINDOW)
+        start = len(data[lo:m.start()].decode("utf-8", "surrogateescape"))
+        return data[lo:m.end() + BIN_WINDOW].decode("utf-8", "surrogateescape"), (start, start + len(m.group(0).decode("utf-8", "surrogateescape")))
+    drive = [m.span() for m in rules.r05_b.finditer(data) if not res.allowed_by("R05", where, *window_of(m))]
     for rid, label, rx in rules.bytes:
-        listed = 0
+        listed = noted = 0
         for m in rx.finditer(data):
-            if not m.group(0):
+            if not m.group(0) or (rid == "R04" and _inside(m.span(), drive)):
                 continue
-            lo = max(0, m.start() - BIN_WINDOW)
-            window = data[lo:m.end() + BIN_WINDOW].decode("utf-8", "surrogateescape")
-            start = len(data[lo:m.start()].decode("utf-8", "surrogateescape"))
-            span = (start, start + len(m.group(0).decode("utf-8", "surrogateescape")))
+            after = data[m.end():m.end() + 96].decode("utf-8", "surrogateescape")
+            standin = _standin_user(rid, m.group(0).decode("latin-1"), after)
+            if standin is not None:              # a stand-in never ends the search: a real name may follow in the same file
+                noted += 1
+                if noted <= BIN_LISTED:
+                    res.hit(rid, label + ", stand-in user (binary)", where, 0, "", _standin_shown(m.group(0).decode("latin-1"), standin), tier="NOTE")
+                continue
+            window, span = window_of(m)
             if listed >= BIN_LISTED and res.allowed_by(rid, where, window, span):
                 continue
             s = m.group(0)[:200].decode("utf-8", "replace")
-            if res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window) == "red":
+            user = _home_user(rid, m.group(0).decode("latin-1"), after) or None
+            if res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window, value=user) == "red":
                 break
             listed += 1
     m = rules.tool_b.search(data)
@@ -596,6 +748,42 @@ SAMPLES = [  # (relative path, bytes, must hit, must not hit) — fragments join
     (".env", b"X=1", {"R12"}, set()),
     (".env.example", b"X=", set(), {"R12"}),
     ("bin.dat", b"\x00\x01\x2fUsers\x2fsomeone/secret\x00", {"R04"}, set()),
+    # 0.1.7: a stand-in user is a NOTE (the note itself is checked in selftest()); a name next to it stays RED
+    ("r04standin.txt", b"cd \x2fhome\x2fuser/app\nsee \x2fUsers\x2f.../x and \x2fUsers\x2f<you>/x\nHOME is \x2fhome\x2fnode.\n", set(), {"R04"}),
+    ("r05standin.txt", b"C:\x5c\x5cUsers\x5c\x5cYourUsername\x5c\x5capp and C:\x5cUsers\x5cname\x5capp", set(), {"R05"}),
+    ("r04standinreal.txt", b"cp \x2fhome\x2fuser/a \x2fUsers\x2fsomeone/b \x2fhome\x2fusers2/c", {"R04"}, set()),
+    ("r04short.txt", b"\x2fhome\x2fjo/x\n\x2fUsers\x2fAmy/y\n", {"R04"}, set()),   # a short name is a name: only one character is a stand-in
+    ("binstandin.dat", b"\x00\x01\x2fhome\x2fnode/app\x00\x2fUsers\x2fsomeone/secret\x00", {"R04"}, set()),
+    ("binstandinonly.dat", b"\x00\x01\x2fhome\x2fnode/app\x00", set(), {"R04"}),
+    # 0.1.7: a drive-letter path with forward slashes is R05 only; a path after a URL scheme is still R04
+    ("r05fwd.txt", b"C:\x2fUsers\x2fsomeone/proj", {"R05"}, {"R04"}),
+    ("r04fileurl.txt", b"open file:\x2fUsers\x2fsomeone/x", {"R04"}, set()),
+    ("binfwd.dat", b"\x00\x01C:\x2fUsers\x2fsomeone/proj\x00", {"R05"}, {"R04"}),
+    # 0.1.7: name@version is not an address; an address, a login to an IP address and a numeric domain still are
+    ("r10version.txt", b"left-pad@" b"1.3.0 and tool@" b"2.0.0-rc.1", set(), {"R10"}),
+    ("r10versionreal.txt", b"pkg@" b"1.2.3\nbob@" b"realcompany.co\nroot@" b"10.0.0.5\nx@" b"163.com", {"R10"}, set()),
+    # 0.1.7: an address is a NOTE only when both sides are stand-ins
+    ("r10standin.txt", b"write to user@" b"company.com or a@" b"b.com", set(), {"R10"}),
+    ("r10standinreal.txt", b"user@" b"realcompany.co\nalice@" b"company.com\nuser@" b"gmail.com", {"R10"}, set()),
+    # 0.1.7: +1 and area code 555 is a NOTE; without the +1, in another country, or with 555 after a real area code it stays RED
+    ("r09area555.txt", b"+1 55" b"5 123" b" 4567\n+1555" b"1234567\n+1 (55" b"5) 867" b"-5309", set(), {"R09"}),
+    ("r09area555real.txt", b"call 55" b"5 123" b" 4567\n+1 60" b"4 555" b" 2671\n+90 55" b"5 123" b" 45 67\n+1 55" b"5 123" b" 4567 8", {"R09"}, set()),
+    # 0.1.7: repeats of one value are one printed line; the records themselves stay one per place
+    ("r10repeat.txt", b"bob@" b"realcompany.co\nbob@" b"realcompany.co\nBOB@" b"realcompany.co\nbill@" b"realcompany.co", {"R10"}, set()),
+    ("r09repeat.txt", b"+1 60" b"4 123" b" 4567 or 604-1" b"23-4567", {"R09"}, set()),
+    # 0.1.7, after an audit: the whole folder name is judged, spaces included; one character is a name; prose after a stand-in
+    # is not part of it; an @ and four numbers is an address whatever follows; values are grouped only when identical;
+    # the part before the @ is judged whole
+    ("r05space.txt", b"C:\x5cUsers\x5cDev Sharma\x5cDocuments\x5ctax.xlsx\nC:\x5cUsers\x5cJ Okafor\x5cDesktop\x5cp.csv\nC:\x5cUsers\x5cYou Zhang\x5cAppData\x5capp.log", {"R05"}, set()),
+    ("binspace.dat", b"\x00\x01C:\x5cUsers\x5cDev Sharma\x5cDocuments\x00", {"R05"}, set()),
+    ("r04onechar.txt", b"\x2fhome\x2fj\x2fjokafor/thesis\n\x2fUsers\x2fk/Documents/papers\nC:\x5cUsers\x5c\xe7\xa3\x8a\x5cDesktop", {"R04", "R05"}, set()),
+    ("r04prose.txt", b"HOME is \x2fhome\x2fnode. The caller creates \x2fworkspace\x2fgroup first\nsee \x2fUsers\x2fme and \x2fhome\x2fuser for more", set(), {"R04"}),
+    ("r10ipsuffix.txt", b"left-pad@" b"1.3.0\nssh admin@" b"192.168.1.10-prod", {"R10"}, set()),
+    ("r05twopeople.txt", b"C:\x5cUsers\x5cMaria Lindqvist\x5ca.txt\nC:\x5cUsers\x5cMaria Okafor\x5cb.txt", {"R05"}, set()),
+    ("r09collide.txt", b"\xe6\x89\x8b\xe6\x9c\xba 131" b"2345" b"6789\noffice (31" b"2) 345" b"-6789", {"R09"}, set()),
+    ("r10nonascii.txt", b"\xe7\x8e\x8ba@" b"b.com and jos\xc3\xa9test@" b"test.com", {"R10"}, set()),
+    ("fwdallow.txt", b"C:\x2fUsers\x2fsomeone/proj", {"R05"}, {"R04"}),
+    ("r04repeat.txt", b"\x2fUsers\x2fsomeone/a\n\x2fUsers\x2fsomeone/b\n\x2fUsers\x2fother/c\n\x2fVolumes\x2fWork/a\n\x2fVolumes\x2fWork/b", {"R04"}, set()),
     ("clean.md", b"# Clean\nContact a@example.com or +1 202 555 0101. Built with Claude.\n", set(),
      {"R04", "R05", "R07", "R08", "R09", "R10", "R12", "U01", "U02", "U03", "U04", "U05"}),
 ]
@@ -648,6 +836,45 @@ def selftest():
         check(any(h["where"] == "r09splitarea.txt" and h["rule"] == "R09"
                   and h["match"] == split_data.decode() for h in res.red),
               "r09splitarea.txt retains the whole run-on match")
+        def notes(rel, rule):
+            return [n for n in res.note if n["where"] == rel and n["rule"] == rule]
+        def reds(rel, rule):
+            return [r for r in res.red if r["where"] == rel and r["rule"] == rule]
+        check(len(notes("r04standin.txt", "R04")) == 4, f"r04standin.txt: four stand-in users are four NOTEs (got {len(notes('r04standin.txt', 'R04'))})")
+        check(len(notes("r05standin.txt", "R05")) == 2, f"r05standin.txt: two stand-in Windows users are two NOTEs (got {len(notes('r05standin.txt', 'R05'))})")
+        check(len(reds("r05space.txt", "R05")) == 3 and not notes("r05space.txt", "R05"), f"r05space.txt: a folder name with a space is judged whole, never by its first word (got {len(reds('r05space.txt', 'R05'))} RED)")
+        check(len(reds("binspace.dat", "R05")) == 1 and not notes("binspace.dat", "R05"), "binspace.dat: the same in a binary")
+        check(len(reds("r04onechar.txt", "R04")) == 2 and len(reds("r04onechar.txt", "R05")) == 1, "r04onechar.txt: a one-character folder is a name, in any script, and so is a home filed under its first letter")
+        check(len(notes("r04prose.txt", "R04")) == 3, f"r04prose.txt: prose after a stand-in is not part of the name (got {len(notes('r04prose.txt', 'R04'))} NOTEs)")
+        check(len(reds("r10ipsuffix.txt", "R10")) == 1 and len(notes("r10ipsuffix.txt", "R10")) == 1, f"r10ipsuffix.txt: an @ and four numbers stays RED whatever follows; the version next to it is a NOTE (got {len(reds('r10ipsuffix.txt', 'R10'))} RED)")
+        check(len(reds("r10nonascii.txt", "R10")) == 2, f"r10nonascii.txt: an address is judged on its whole part before the @ (got {len(reds('r10nonascii.txt', 'R10'))} RED)")
+        ra = scan_tree(rules, d, parse_allow(["R05::fwdallow.txt::C:.Users."], None))
+        check("R05" in {x["rule"] for x in ra.allowed if x["where"] == "fwdallow.txt"} and "R04" in {x["rule"] for x in ra.red if x["where"] == "fwdallow.txt"},
+              "fwdallow.txt: when an allow entry takes the R05 finding away, R04 still reports the path")
+        check(len(reds("r04standinreal.txt", "R04")) == 2 and len(notes("r04standinreal.txt", "R04")) == 1,
+              "r04standinreal.txt: a stand-in on a line is a NOTE, the two names on the same line stay RED")
+        check(len(reds("r04short.txt", "R04")) == 2, f"r04short.txt: two- and three-letter names stay RED (got {len(reds('r04short.txt', 'R04'))})")
+        check(len(notes("binstandin.dat", "R04")) == 1, "binstandin.dat: the stand-in before the name is a NOTE, and the search goes on to the name")
+        check(len(notes("binstandinonly.dat", "R04")) == 1, "binstandinonly.dat: a stand-in user in a binary is a NOTE")
+        check(len(reds("r05fwd.txt", "R05")) == 1, "r05fwd.txt: a drive-letter path with forward slashes is one finding")
+        ver = notes("r10version.txt", "R10")
+        check(len(ver) == 2 and [c for _, c, _ in printed(ver)] == [2], f"r10version.txt: two name@version strings are two NOTE records, printed as one line that counts them (got {len(ver)})")
+        check(len(reds("r10versionreal.txt", "R10")) == 3 and len(notes("r10versionreal.txt", "R10")) == 1,
+              f"r10versionreal.txt: the address, the login to an IP address and the numeric domain stay RED (got {len(reds('r10versionreal.txt', 'R10'))} RED)")
+        check(len(notes("r10standin.txt", "R10")) == 2, f"r10standin.txt: two addresses with a stand-in on both sides are two NOTEs (got {len(notes('r10standin.txt', 'R10'))})")
+        check(len(reds("r10standinreal.txt", "R10")) == 3, f"r10standinreal.txt: a stand-in on one side only stays RED (got {len(reds('r10standinreal.txt', 'R10'))} RED)")
+        check(len(notes("r09area555.txt", "R09")) == 5, f"r09area555.txt: three +1 numbers in area code 555 are NOTEs, and so is each one's second match without the +1 (got {len(notes('r09area555.txt', 'R09'))})")
+        def lines_of(rel, rule):
+            return sorted(count for r, count, _ in printed(reds(rel, rule)))
+        check(len(reds("r10repeat.txt", "R10")) == 4 and lines_of("r10repeat.txt", "R10") == [1, 1, 2],
+              f"r10repeat.txt: four records, three printed lines; only the identical address is folded (got {lines_of('r10repeat.txt', 'R10')})")
+        check(lines_of("r09repeat.txt", "R09") == [1, 2],
+              f"r09repeat.txt: the same ten digits twice are one printed line; the eleven-digit form is its own (got {lines_of('r09repeat.txt', 'R09')})")
+        check(lines_of("r05twopeople.txt", "R05") == [1, 1], f"r05twopeople.txt: two people who share a first name are two lines (got {lines_of('r05twopeople.txt', 'R05')})")
+        check(lines_of("r09collide.txt", "R09") == [1, 1], f"r09collide.txt: an eleven-digit number and a ten-digit one are never one value (got {lines_of('r09collide.txt', 'R09')})")
+        check(len(reds("r04repeat.txt", "R04")) == 5 and lines_of("r04repeat.txt", "R04") == [1, 1, 1, 2],
+              f"r04repeat.txt: one line per home-path user; a path that is not a home path is never grouped (got {lines_of('r04repeat.txt', 'R04')})")
+        check(all("_value" not in r for r in public(res.red) + public(res.note)) and any("_value" in r for r in res.red), "--json records carry no grouping value")
         check("R12" in by_where.get("__pycache__/", set()), "__pycache__/ directory itself is R12")
         check(exit_code(res) == 1, "a scan with RED hits exits 1")
         xl = {rec["rule"] for rec in res.red if rec["where"].startswith("book.xlsx")}
@@ -767,17 +994,20 @@ def main():
         print(f"git range {a.git_range}: {_n(n_c, 'commit')}, {_n(n_b, 'blob')} scanned")
     print(f"scanned {a.dir}: {_n(res.n_files, 'file')} · {res.n_text} text · {res.n_bytes} binary · {_n(res.n_members, 'archive member name')} · {_n(res.n_pdf, 'PDF stream')}")
     for title, rows in (("RED", res.red), ("ALLOWED", res.allowed), ("NOTE", res.note)):
-        print(f"{title} ({len(rows)}):")
-        for r in rows:
-            print(f"  [{r['rule']} {r['label']}] {r['where']}:{r['line']}  {r['match']}   | {r['excerpt'][:120]}" + (f"   allowed by {r['allowed_by']}" if 'allowed_by' in r else ""))
+        shown = printed(rows)
+        repeats = "" if len(shown) == len(rows) else f", printed as {_n(len(shown), 'line')}: a repeated value is one line with its count, --json lists every place"
+        print(f"{title} ({len(rows)}{repeats}):")
+        for r, count, files in shown:
+            print(f"  [{r['rule']} {r['label']}] {r['where']}:{r['line']}  {r['match']}   | {r['excerpt'][:120]}" + (f"   allowed by {r['allowed_by']}" if 'allowed_by' in r else "")
+                  + (f"   × {count} in {_n(len(files), 'file')}, the first is shown" if count > 1 else ""))
     print(f"UNSCANNED ({len(res.unscanned)}):" + ("" if res.unscanned else " none"))
     for u in res.unscanned:
         print(f"  {u}")
     verdict = "RED" if res.red else "GREEN"
     print(f"verdict: {'🔴 RED — do not publish' if res.red else '🟢 GREEN — NOTE items still need a human look'}")
     if a.json:
-        json.dump({"stamp": stamp, "dir": os.path.abspath(a.dir), "config": cfg_path, "git_range": a.git_range, "red": res.red,
-                   "allowed": res.allowed, "note": res.note, "unscanned": res.unscanned, "verdict": verdict}, open(a.json, "w"), indent=1, ensure_ascii=False)
+        json.dump({"stamp": stamp, "dir": os.path.abspath(a.dir), "config": cfg_path, "git_range": a.git_range, "red": public(res.red),
+                   "allowed": public(res.allowed), "note": public(res.note), "unscanned": res.unscanned, "verdict": verdict}, open(a.json, "w"), indent=1, ensure_ascii=False)
     return exit_code(res)
 
 

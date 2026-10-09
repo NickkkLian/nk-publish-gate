@@ -4,7 +4,7 @@ description: "A privacy gate to run before anything goes public (a repo, a relea
 license: MIT
 metadata:
   provenance: own practice (2026-07 to 2026-09); phone fiction reservations from NANPA, Ofcom and ACMA
-  version: 0.1.6
+  version: 0.1.7
 ---
 # Publish gate
 
@@ -39,7 +39,7 @@ report says so in its first line — your own identifiers are then **not** being
 2. Read the four lists in order: **RED** (fix, or add an allow entry `RULES::GLOB::REGEX` with a reason; it must
    cover the matched text itself, see `references/config-guide.md`),
    **ALLOWED** (still printed — every allow entry is a decision someone can review), **NOTE** (images, big
-   files, AI tool names inside archives: a human looks), **UNSCANNED** (anything the gate could not open —
+   files, AI tool names inside archives, home paths with a stand-in user, package-and-version counts, stand-in e-mail addresses, `+1` numbers in area code 555: a human looks), **UNSCANNED** (anything the gate could not open —
    open it by hand or remove it).
 3. The verdict is green only when RED is empty. Keep the report next to the push evidence.
 4. History is dirty and must stay public? Decide with `references/history-decision.md` before rewriting.
@@ -71,6 +71,47 @@ Sources read 2026-10-07: [NANPA](https://nanpa.com/numbering/555-line-numbers),
 
 It also carries a short secret rule (fourteen key formats and `api_key = <long value>`-style assignments), and with
 `--git-range` it finds a secret that was committed and then deleted. That rule is a backstop, not a scanner.
+
+## What is a note, not RED
+
+Five kinds of finding that 0.1.6 printed as RED are NOTEs since 0.1.7. A NOTE is printed and is in `--json`, and it
+does not turn the verdict red: read the NOTE list.
+
+- **A home path whose user folder is a stand-in.** The whole folder name, up to the next path separator and with any
+  spaces in it, must be one of `user`, `username`, `yourusername`, `you`, `name`, `me`, `dev`, `node`, or three dots,
+  or a name in angle brackets. Any other name is RED: an invented one such as `jane`, a single letter, a first name
+  and a surname. The gate cannot know who owns a name, so a real account that is called exactly `dev` or `me` is a
+  NOTE too. If that is your login, put it in the config (`usernames`), which is RED wherever it appears. The list is
+  `STANDIN_USERS` in the script.
+- **A package and its version.** A package name, an `@` and a version number (the form lock files are full of) has the
+  shape of an e-mail address and is not one. Each is a NOTE record in `--json`; the terminal prints one line per file
+  with the count. An `@` followed by four numbers (an IP address, as in a login to a machine) stays RED, whatever
+  follows the fourth number. An `@` followed by two or three numbers cannot be told from a version and is a NOTE.
+- **An e-mail address made of two stand-ins.** Only when the whole part before the `@` and the whole domain are each
+  on a short list: the part before the `@` (`user`, `test`, `name`, `you`, `foo`, `john.doe` and a few more) and the
+  domain (`company.com`, `yourdomain.com`, `acme.com`, `contoso.com`, `test.com` and a few more; no mail provider is
+  on it). `STANDIN_MAIL_LOCAL` and `STANDIN_MAIL_DOMAIN` in the script are the whole lists. A stand-in on one side
+  only stays RED.
+- **A phone number written with `+1` and area code 555.** NANPA lists that area code as not assignable
+  ([NPA Database](https://www.nanpa.com/reports/npa-reports), read 2026-10-08). The gate makes such a number a NOTE.
+  That is not proof that the number belongs to nobody, so look at it. Only that exact shape: the `+1` is written and
+  eleven digits follow in all. Ten digits starting 555 with no country code stay RED, and so does 555 after a real
+  area code, unless it is one of the reserved 555-01xx numbers.
+- **A Windows path with forward slashes** was reported by both path rules. It is now one finding, under R05. If an
+  allow entry covers the R05 finding, R04 reports the path instead.
+
+**A repeat is one line.** The same e-mail address, the same phone digits or the same user folder name is printed
+once, with its count, the number of files and its first place. Only identical values are folded. The exit code and
+the verdict do not change, and `--json` lists every place.
+
+Measured on 20 public skill repositories on 2026-10-08 (the 20 most starred under 50 MB for three skill topics),
+0.1.6 against 0.1.7: RED lines printed, 5,560 to 360; RED lines for the median repository, 23 to 7.5; repositories
+with a RED verdict, 19 to 18. Every one of the 5,560 findings of 0.1.6 is still in the 0.1.7 `--json`, as RED or as
+a NOTE (21 Windows paths are now reported by one rule instead of two). A set picked out by hand before the change,
+27 home paths with a real account name and 66 key-shaped strings, is still RED in full. That set does not cover
+e-mail addresses or phone numbers: for those two rules the measurement does not show that no real one became a
+NOTE. Not all of what is left needs fixing either: most of the remaining e-mail addresses and phone numbers sit in
+test files and examples, and the gate does not know a test file from a real one.
 
 ## Boundaries
 
