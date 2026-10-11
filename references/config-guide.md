@@ -1,4 +1,4 @@
-# Config guide (gate.json)
+# Config guide (gate.json) — 0.1.8
 
 Keep the file outside every repository (default lookup: `--config`, then `$PUBLISH_GATE_CONFIG`, then
 `~/.config/publish-gate/gate.json`). It contains exactly the strings you do not want published, so it must
@@ -14,14 +14,87 @@ never be published itself.
 | `allowed_author_emails` | the only addresses commits may carry (e.g. `12345+you@users.noreply.github.com`) | exact |
 | `extra_local_paths` | mount points or workspace names to treat as local paths | substring |
 
-Allow entries (`--allow`, or `--allow-file` with one per line) downgrade a hit to ALLOWED; they are printed in
-every report so the exception stays visible. Use them for deliberate mentions (your public e-mail on a profile
-README), never to silence a class of hits.
+## Exact approvals
+
+Each RED finding supplies a line you can copy:
+
+```text
+SHA256 RULE FILE_DIGEST VALUE_DIGEST
+```
+
+RULE is one rule ID. FILE_DIGEST hashes the exact source file identity, so brackets, spaces, quotes and other
+characters need no escaping and a key-shaped filename never puts a key in the allow file. VALUE_DIGEST hashes the
+complete matched value. Both use all 64 lowercase hex characters of SHA-256 (UTF-8; undecodable binary bytes
+round-trip unchanged). The generated space-delimited form contains no `::` and cannot collide with either legacy
+syntax. Copy it as supplied. For a home path the value is the whole
+account folder path, not the truncated prefix the detector originally matched. For a size finding it is the exact
+byte size. Ordinary file identities are compact ASCII JSON arrays `["file", relative_path]`; archive identities
+are `["member", base_identity, [member_names...]]`, and history uses the full commit ID with the file path or
+metadata role. These arrays are hashed, not stored in the allow file. Structured identities prevent a literal
+filename containing `::` from impersonating a different archive member, or a short commit prefix from identifying
+another commit. The report supplies a source-file hint when the displayed location needs clarification.
+An approval does not extend to another member or commit. Filenames/content and all PDF streams belong to the
+same source file, so the same approved value there is covered without binding to a stream number. Line numbers are not bound:
+identical matched values elsewhere in that same file/location are covered, and unrelated edits do not invalidate
+the decision. Another value, even one with the same visible masked prefix, stays RED. Another file needs its own
+approval. No key or full e-mail value needs to be printed or typed to make the entry.
+
+Unix folders end at `/`; a backslash is literal there. Windows folders use either path separator. If no following
+separator gives a home folder's boundary, the gate keeps the remaining segment through the line/control boundary,
+including spaces, rather than approving a first word that could hide a longer account. It does not guess where
+trailing prose begins; such an ambiguous approval may need renewal if that trailing text changes.
+
+Scan, show the person the findings, ask which named findings they approve, then copy each approved finding's
+entry into a separate `--approve` argument:
+
+```sh
+python3 scripts/publish_gate.py folder
+python3 scripts/publish_gate.py folder --approve 'ENTRY_FROM_REPORT' --reason 'public explanation'
+python3 scripts/publish_gate.py folder
+```
+
+Repeated `--approve` arguments share the supplied reason, but each must name a current RED finding. Unknown
+or stale entries, missing reasons and multiline reasons are refused before any append. There is no approve-all
+flag. At a terminal, `--settle` shows each rule, file/line, masked finding, context and a sentence about when it
+would be real; answer yes/no and give a reason for each yes. A no remains RED. A completed pass appends dated
+comment/entry pairs, preserving every previous byte; EOF appends nothing. Settlement scans enumerate all binary
+matches for this one review; ordinary scans preserve their earlier first-RED-per-rule binary behavior.
+
+The default file is `folder/.publish-gate-allow`, read automatically at the root with its entry count printed.
+`--ignore-default-allow` ignores its decisions. `--allow-file F` also reads F and uses it as the append destination;
+settling can create F, but an absent input file on a normal scan is a usage error (one line, exit 2). `--allow ENTRY`
+also accepts a generated entry. Valid digest entry bodies in the default file or explicitly read allow files are
+structural; the rest of each file is scanned, including comments and legacy entries. The default remains structurally
+recognized when its decisions are ignored. Digest-looking lines in ordinary files receive no exemption.
+
+Reasons must be public explanations: pasting a key into a comment in the allow file is still RED. A digest can
+reveal a guessed low-entropy value, but settling says that value may be published in this file, so the value is in
+the same repository anyway; an allow file must still never be where a real secret is approved.
+
+Use `--scope-all-files` only if the person explicitly approves the same rule/value everywhere. It converts each
+named approval into `SHA256-WIDE RULE * VALUE_DIGEST`, visibly WIDE in the report. This form supports all files,
+not arbitrary globs; exact paths remain the default. It still cannot cover a different value or rule.
+
+An entry that covers no finding is printed as UNUSED (including an entry shadowed by an earlier one). Keep the
+ALLOWED list in the report: settling is a reviewable decision, not evidence that a credential is safe.
+
+## Legacy regex entries
+
+Both existing forms below retain their matching behavior. These patterns can silence a class of hits; they are
+supported for existing allow files, and every legacy regex entry is reported as WIDE because it can cover more
+than one complete value. Prefer generated digest entries for new decisions.
 
 The form is `RULES::GLOB::REGEX`, for example `R10::README.md::you@example\.org`. A hit is allowed only when its
 rule is in RULES (a comma list, such as `U01,U02`), its path matches GLOB, and one match of REGEX on the same line
 covers the matched text itself (in a binary: within 200 bytes on either side). Every match on a line is its own
-hit, so an entry written for the first one does not cover a second.
+hit. An entry may cover several different values on that line or elsewhere if its regex spans each one: a prefix
+entry for `alice` can cover `alicewong`, and `contact.md::.*` covers every rule in that file. No automatic narrowing
+is applied to old entries.
+
+Allow files take one entry per line. Blank lines and whole-line comments (including indented comments) are
+accepted. Whitespace followed by `#` in a legacy entry is refused with an inline-comment message; put comments
+on their own lines. File paths are hashed exactly, so a `#` in a path never becomes a comment in a generated entry.
+Invalid regexes are usage errors.
 
 Changed in 0.1.2. Until 0.1.1 an entry counted when its REGEX matched anywhere within 24 characters of a hit, so an
 allowed word could also let through a secret or a path right next to it. The two-field form `GLOB::REGEX` is still
@@ -35,10 +108,15 @@ config. A real account named exactly like a stand-in is a NOTE as well, so if yo
 `usernames`: a name there, or in `identifiers`, is RED wherever it appears. A package name followed by `@` and a
 version number is not an e-mail address; each one is a NOTE record in `--json`, printed as one line per file.
 
-Repeats (0.1.7). The same e-mail address, the same phone digits or the same user folder name is printed as one RED
-line with its count. An allow entry is still judged place by place, and `--json` lists every place. A Windows path
-written with forward slashes is reported under R05 only; when an allow entry covers that finding, R04 reports the
-path, so an entry for a forward-slash path names both rules (`R04,R05::…`).
+Repeats (0.1.8). Identical matched values under the same rule in one file/location print as one RED decision;
+another file prints separately. ALLOWED and NOTE retain their earlier grouping. `--json` lists every place and
+includes `settle_entry` and `real_if` on RED/ALLOWED records. A forward-slash Windows path is reported under R05
+only. A legacy regex allowing R05 still exposes R04 as before, so that regex needs both IDs (`R04,R05::…`). A new
+exact digest approval of R05 keeps the path a single finding; no second approval is needed.
+
+Detection change (0.1.8). R04 now recognizes an uppercase ASCII initial after the Linux home prefix as well as a
+lowercase one, in text and binaries. The account is RED unless the existing stand-in policy makes it a NOTE.
+This is the sole expansion of detections; no rule or tier was made quieter.
 
 Rule IDs: R04/R05 paths (a stand-in user: NOTE) · R07 secret shapes · R08 assigned secrets · R09 phones (`+1` with area code 555: NOTE) · R10 e-mails (package-and-version counts, two stand-ins: NOTE) · R12 junk ·
 R13 tool names (NOTE) · R14 non-Latin text (NOTE, only with `--note-scripts`) · R15 big files · R16 images

@@ -4,7 +4,7 @@ description: "A privacy gate to run before anything goes public (a repo, a relea
 license: MIT
 metadata:
   provenance: own practice (2026-07 to 2026-09); phone fiction reservations from NANPA, Ofcom and ACMA
-  version: 0.1.7
+  version: 0.1.8
 ---
 # Publish gate
 
@@ -36,14 +36,49 @@ report says so in its first line — your own identifiers are then **not** being
 1. Scan the tree exactly as it will be published (the clone you will push from, not your working copy):
    `python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --git-range origin/main..HEAD --json gate.json`
    For a repository going public for the first time use `--git-range HEAD` (all history).
-2. Read the four lists in order: **RED** (fix, or add an allow entry `RULES::GLOB::REGEX` with a reason; it must
-   cover the matched text itself, see `references/config-guide.md`),
+2. Read the four lists in order: **RED** (fix, or settle an intentional value after the person approves it;
+   see the settling procedure below and `references/config-guide.md`),
    **ALLOWED** (still printed — every allow entry is a decision someone can review), **NOTE** (images, big
    files, AI tool names inside archives, home paths with a stand-in user, package-and-version counts, stand-in e-mail addresses, `+1` numbers in area code 555: a human looks), **UNSCANNED** (anything the gate could not open —
    open it by hand or remove it).
 3. The verdict is green only when RED is empty. Keep the report next to the push evidence.
 4. History is dirty and must stay public? Decide with `references/history-decision.md` before rewriting.
 5. After the push, clone from the public URL and scan the clone once more. The clone is what the world got.
+
+## Settle a finding (0.1.8)
+
+Every RED finding prints its rule, file and line, masked text, one sentence describing when it would be real,
+and a `settle: SHA256 RULE FILE_DIGEST VALUE_DIGEST` entry. Copy it without typing a value or escaping anything.
+It approves exactly that rule and complete value in that file, including repeats on other lines; moving lines
+does not invalidate it. A different value or a different file stays RED. Home paths print and hash the whole user
+folder path, so `alice` and `alicewong` cannot share an approval. Keys and e-mail addresses stay masked.
+
+**Agent procedure:** show the person the findings and their context, ask which named findings they approve,
+and settle only the findings the person named. Do not infer consent from a test filename, an invented-looking
+value, silence, or a previous approval of another file. Never approve an actual credential. Use one repeated
+`--approve 'ENTRY'` for each approved finding, with `--reason 'public explanation'`:
+
+```sh
+python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --approve 'ENTRY_FROM_REPORT' --reason 'reason the person gave'
+```
+
+For a person at a terminal, `python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --settle` walks the findings
+once: yes/no for each, and a reason for each yes. A no stays RED. EOF or an invalid selection writes nothing.
+The terminal pass and named-approval pass enumerate all binary matches so a hidden second binary value cannot
+appear only after the review. Ordinary scans keep their previous binary listing limits.
+
+Both modes append dated decisions to `<dir>/.publish-gate-allow`; they preserve existing bytes. This default file
+is read on later runs, with its path and entry count printed. `--ignore-default-allow` skips its decisions.
+`--allow-file F` reads an additional file and chooses it as the append destination; settling may create it.
+Reasons are scanned comments, so write a public explanation without pasting private values into it.
+
+Use `--scope-all-files` only when the person explicitly approves that same rule and value in every file; those
+entries and legacy regex entries are marked WIDE in the report. There is no switch to approve all findings.
+Unused entries are named. Existing `RULES::GLOB::REGEX` and `GLOB::REGEX` matching behavior is preserved, including
+prefix matches and class-wide patterns. Inline comments are refused; indented comments on their own line work.
+
+The one new detection in 0.1.8 is a Linux home account starting with an uppercase ASCII letter, previously missed
+by R04. It now follows the same RED/stand-in NOTE policy as a lowercase account. No existing rule was quieted.
 
 ## What it looks for that a secret scanner does not
 
@@ -100,11 +135,12 @@ does not turn the verdict red: read the NOTE list.
 - **A Windows path with forward slashes** was reported by both path rules. It is now one finding, under R05. If an
   allow entry covers the R05 finding, R04 reports the path instead.
 
-**A repeat is one line.** The same e-mail address, the same phone digits or the same user folder name is printed
-once, with its count, the number of files and its first place. Only identical values are folded. The exit code and
-the verdict do not change, and `--json` lists every place.
+**A repeat within a file is one RED decision.** In 0.1.8 identical matched values under the same rule in the same
+file/location print once with their count. The same value in another file prints separately so an approval cannot
+cover an unread file. ALLOWED and NOTE retain the earlier grouping. `--json` lists every place and supplies each
+RED finding's `settle_entry` and `real_if` sentence.
 
-Measured on 20 public skill repositories on 2026-10-08 (the 20 most starred under 50 MB for three skill topics),
+Measured on 20 public skill repositories,
 0.1.6 against 0.1.7: RED lines printed, 5,560 to 360; RED lines for the median repository, 23 to 7.5; repositories
 with a RED verdict, 19 to 18. Every one of the 5,560 findings of 0.1.6 is still in the 0.1.7 `--json`, as RED or as
 a NOTE (21 Windows paths are now reported by one rule instead of two). A set picked out by hand before the change,

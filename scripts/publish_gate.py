@@ -6,6 +6,19 @@
     python3 publish_gate.py --init-config <path>      # write a config template (keep it OUTSIDE any repo)
     python3 publish_gate.py --selftest
 
+0.1.8 settling: <dir> --settle (terminal yes/no plus a reason for each yes), or
+<dir> --approve 'ENTRY' [--approve 'ENTRY' ...] --reason 'why these are intentional'.
+Copy each ENTRY from a RED finding's settle line; never approve an actual credential.
+Entries are appended with dates/reasons to <dir>/.publish-gate-allow, or --allow-file F.
+The default file is read automatically; --ignore-default-allow skips it. Existing regex
+entries keep their matching behavior. Inline comments are refused; use a separate comment line.
+SHA256 RULE FILE_DIGEST VALUE_DIGEST binds one rule, exact file/location and complete value,
+independent of line number. For home paths the value is the whole account folder path.
+--scope-all-files explicitly broadens each named approval to the same rule/value in all
+files (SHA256-WIDE); it never approves all values. Wide and unused entries are reported.
+Settlement passes enumerate all binary matches so latent findings can be reviewed once;
+ordinary scans retain their existing first-RED-per-binary-rule behavior.
+
 Exit: 0 green (no RED; NOTE may exist) · 1 RED · 2 selftest failed / usage error. The selftest runs first,
 shares scan_tree / scan_git_range with the real run, and aborts everything if it fails (fail-loud).
 
@@ -25,9 +38,9 @@ Built-in RED rules (no config needed):
 Config rules (your own identifiers, from --config or $PUBLISH_GATE_CONFIG or ~/.config/publish-gate/gate.json):
   U01 identifiers (handles, private mailbox names)  U02 legal names  U03 personal URLs  U04 usernames/hostnames  U05 private project names
 NOTE (listed, never red): R04/R05 home paths with a stand-in user · R09 +1 numbers in area code 555 · R10 name@version counts and stand-in addresses · R13 AI tool names inside archives/binaries · R14 non-Latin scripts (only with --note-scripts) · R15 file >= 50 MB · R16 images (a machine cannot read a screenshot: look at them)
-Repeats (0.1.7): the same e-mail address, the same phone digits or the same home-path user folder is printed as one RED line with
-its count and its first place; the name@version NOTEs of one file are one line. The exit code, the verdict and --json are not
-affected: --json lists every place and every string.
+Repeats (0.1.8): identical matched values under the same rule in the same file/location are one RED decision with
+their count and first place; another file needs another decision. ALLOWED and NOTE keep their earlier grouping,
+including one name@version NOTE line per file. --json lists every occurrence and supplies settle_entry / real_if.
 Archives (PK header: zip/xlsx/docx/pptx/jar) are opened up to 3 levels, member names included; PDF Flate streams are inflated and
 scanned as text; binaries are scanned as bytes; every file is looked at regardless of extension; anything unreadable is listed as UNSCANNED.
 --git-range: every commit in the range (e.g. origin/main..HEAD, or HEAD for all history) has its author/committer, message, and every
@@ -38,7 +51,10 @@ on the same line covers the matched text itself (in a binary: within 200 bytes o
 0.1.2 changed this: until 0.1.1 an entry counted if REGEX matched within 24 characters of a hit, so an allowed word could hide a
 secret or a path right next to it; two-field entries are still read, and judged by the new rule.
 """
-import argparse, datetime, fnmatch, io, json, os, re, subprocess, sys, tempfile, zipfile, zlib
+import argparse, datetime, fnmatch, hashlib, io, json, os, re, subprocess, sys, tempfile, zipfile, zlib
+
+VERSION = "0.1.8"
+DEFAULT_ALLOW = ".publish-gate-allow"
 
 SKIP_DIRS = {".git"}
 JUNK_DIRS = {"__pycache__", ".venv", "venv", "node_modules", ".mypy_cache", ".pytest_cache",
@@ -48,7 +64,7 @@ MAX_DEPTH, MAX_MEMBER, BIG_NOTE, BIG_RED = 3, 50 << 20, 50 << 20, 100 << 20
 IMAGE_EXT = re.compile(r"\.(png|jpe?g|gif|webp|svg|bmp|tiff?|ico)$", re.I)
 BUILTIN_RED = [
     # written with \x2f for "/" so that the gate does not flag its own source when it scans itself
-    ("R04", "local absolute path", r"\x2fUsers\x2f|\x2fhome\x2f[a-z]|\x2fprivate\x2ftmp\x2f|\x2fVolumes\x2f|~\x2fDesktop|~\x2fDocuments", 0),
+    ("R04", "local absolute path", r"\x2fUsers\x2f|\x2fhome\x2f[A-Za-z]|\x2fprivate\x2ftmp\x2f|\x2fVolumes\x2f|~\x2fDesktop|~\x2fDocuments", 0),
     ("R05", "Windows user path", r"\b[A-Za-z]:[\\/]+Users[\\/]", re.I),
     ("R07", "secret shape", r"sk-ant-[A-Za-z0-9_-]{8,}|\bsk-(?:proj-)?[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}"
                             r"|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}"
@@ -118,7 +134,7 @@ NAME_MORE = re.compile(r"((?:[ \t]+[^\x00-\x20\\\x2f\"'`<>|]+)+)[\\\x2f]")
 NAME_TAIL = re.compile(r"[^\x00-\x20\\\x2f\"'`)(\]\[,;:|&=#]*")
 ANGLE_NAME = re.compile(r"<[^<>]*>")
 MAIL_EDGE = set(" \t<>()[]{}\"'`,;:=|\\\x2f")   # what may stand right before an address that is judged as a stand-in
-HOME_LINUX = re.compile(r"\x2fhome\x2f[a-z]")
+HOME_LINUX = re.compile(r"\x2fhome\x2f[A-Za-z]")
 VERSION_START = re.compile(r"\d")
 
 
@@ -193,8 +209,97 @@ def printed(rows):
 
 
 def public(rows):
-    """Records as --json writes them: without the grouping value, so the file is the same as before 0.1.7."""
-    return [{k: v for k, v in r.items() if k != "_value"} for r in rows]
+    """JSON records retain every occurrence and omit private grouping fields."""
+    return [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+
+
+def digest_of(value):
+    return hashlib.sha256(value.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+def digest_path(path):
+    """Tag physical paths and archive/history origins before hashing, avoiding display-name aliases."""
+    scope = path if isinstance(path, tuple) else ("file", path)
+    return digest_of(json.dumps(scope, ensure_ascii=True, separators=(",", ":")))
+
+
+def scope_label(scope):
+    if not isinstance(scope, tuple):
+        return safe_excerpt(scope)
+    if scope[0] == "member":
+        return scope_label(scope[1]) + " → member " + " → ".join(safe_excerpt(x) for x in scope[2])
+    if scope[0] == "git-file":
+        return f"commit {scope[1]} file {safe_excerpt(scope[2])}"
+    return " ".join(safe_excerpt(str(x)) for x in scope)
+
+
+class DigestEntry:
+    """Exact file/value approval; wide entries require an explicit different prefix."""
+    def __init__(self, rule, path, digest, wide=False, hashed_path=False):
+        self.rule, self.digest, self.wide = rule, digest, wide
+        self.path = path if wide or hashed_path else digest_path(path)
+
+    def __str__(self):
+        prefix = "SHA256-WIDE" if self.wide else "SHA256"
+        return f"{prefix} {self.rule} {self.path} {self.digest}"
+
+
+def entry_text(entry):
+    if isinstance(entry, DigestEntry):
+        return str(entry)
+    rules, glob, rx = entry
+    return (",".join(sorted(rules)) + "::" if rules else "") + glob + "::" + rx.pattern
+
+
+def safe_excerpt(text):
+    """Mask complete keys and addresses even when they neighbour another finding."""
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    for rid, _, rx, flags in BUILTIN_RED:
+        if rid in MASK_RULES:
+            text = re.sub(rx, lambda m: m[0][:6] + f"…({len(m[0])} chars)", text, flags=flags)
+    text = ASSIGNED.sub(lambda m: m[0].replace(m[2], m[2][:6] + f"…({len(m[2])} chars)"), text)
+    return EMAIL.sub(lambda m: m[0][:1] + "***@" + m[0].partition("@")[2], text)
+
+
+def home_value(rid, matched, after):
+    user = _home_user(rid, matched, after.split("\x00", 1)[0])
+    if user is not None:
+        separators = "\\/" if rid == "R05" else "/"
+        tail = (matched[-1] + after if HOME_LINUX.fullmatch(matched) else after).lstrip(separators)
+        pattern = r"([^\\/\x00-\x1f]+)[\\/]" if rid == "R05" else r"([^/\x00-\x1f]+)/"
+        segment = re.match(pattern, tail)
+        if segment:
+            user = segment[1]
+        else:
+            token = re.match(r"[^\x00-\x1f]+", tail)
+            if token:
+                user = token[0]
+    return _standin_shown(matched, user) if user else matched
+
+
+REAL_IF = {
+    "R04": "Real if this path names an account or local workspace that should stay private.",
+    "R05": "Real if this path names a Windows account that should stay private.",
+    "R07": "Real if this is a credential or private key; remove or rotate it rather than approve it.",
+    "R08": "Real if this assigned value is a password or credential; remove or rotate it rather than approve it.",
+    "R09": "Real if this number reaches a person or service whose number should stay private.",
+    "R10": "Real if this address identifies a mailbox that should stay private.",
+    "R12": "Real if this cache, environment or junk item should be removed from the published tree.",
+    "R15": "Real if this file is too large for the intended publication destination.",
+    "R17": "Real if this commit carries an author or committer address that should stay private.",
+}
+
+
+def settle_groups(rows):
+    """One decision per rule, file and exact value, never folded across files."""
+    out, at = [], {}
+    for row in rows:
+        key = row["settle_entry"]
+        if key in at:
+            at[key][1] += 1
+        else:
+            out.append([row, 1, {row["where"]}]); at[key] = out[-1]
+    return out
 
 
 # ACMA, read 2026-10-07 (page last updated 2026-09-03):
@@ -290,29 +395,45 @@ class Result:
         self.allow = allow
         self.red, self.allowed, self.note, self.unscanned = [], [], [], []
         self.n_files = self.n_text = self.n_bytes = self.n_members = self.n_pdf = 0
+        self.used = set()
+        self.review_all_binary = False
+        self.scope = None
 
-    def allowed_by(self, rule, where, text, span):
+    def allowed_by(self, rule, where, text, span, identity=None, legacy_only=False, track=False):
         """The allow entry that covers this hit, or None. An entry covers a hit only when it names the hit's rule (a
         two-field entry names every rule), its GLOB matches the path, and one match of its REGEX in `text` spans the
         matched text itself — a neighbour on the same line is never enough, however close (0.1.1 accepted anything
         within 24 characters, so an allowed word could hide a path or a secret right next to it)."""
-        if span is None:
-            return None
         base = where.split("::")[0].replace(" (file name)", "")
-        for rules_ok, glob, rx in self.allow:
+        for entry in self.allow:
+            if isinstance(entry, DigestEntry):
+                if legacy_only or identity is None:
+                    continue
+                matches = (entry.rule == rule and entry.digest == digest_of(identity)
+                           and (entry.wide or entry.path == digest_path(self.scope if self.scope is not None else where)))
+                if matches:
+                    if track:
+                        self.used.add(entry_text(entry))
+                    return entry_text(entry)
+                continue
+            if span is None:
+                continue
+            rules_ok, glob, rx = entry
             if rules_ok is not None and rule not in rules_ok:
                 continue
             if not fnmatch.fnmatch(base, glob):
                 continue
             if any(m.end() > m.start() and m.start() <= span[0] and span[1] <= m.end() for m in rx.finditer(text)):
-                return (",".join(sorted(rules_ok)) + "::" if rules_ok else "") + f"{glob}::{rx.pattern}"
+                if track:
+                    self.used.add(entry_text(entry))
+                return entry_text(entry)
         return None
 
-    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None, value=None):
+    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None, value=None, identity=None):
         """Record a hit. `span` is where the match sits in `allow_text` (default: `line_text`); callers that know it pass
         it, so a second occurrence of the same text is judged on its own. Returns the list it went to."""
-        shown = matched[:6] + "…" + f"({len(matched)} chars)" if rule in MASK_RULES else matched
-        excerpt = line_text.strip()
+        shown = matched[:6] + "…" + f"({len(matched)} chars)" if rule in MASK_RULES else safe_excerpt(matched)
+        excerpt = safe_excerpt(line_text.strip())
         if len(excerpt) > 160:
             i = max(0, excerpt.find(matched[:20]) - 60); excerpt = "…" + excerpt[i:i + 150] + "…"
         if rule in MASK_RULES and matched in excerpt:
@@ -330,7 +451,13 @@ class Result:
         if span is None:
             pos = text.find(matched) if matched else -1
             span = (pos, pos + len(matched)) if pos >= 0 else None
-        by = self.allowed_by(rule, where, text, span)
+        if identity is None:
+            identity = text[span[0]:span[1]] if span is not None else matched
+        rec["settle_entry"] = str(DigestEntry(rule, self.scope if self.scope is not None else where, digest_of(identity)))
+        if self.scope is not None and self.scope != where:
+            rec["source"] = scope_label(self.scope)
+        rec["real_if"] = REAL_IF.get(rule, "Real if this is one of the configured personal identifiers that should stay private.")
+        by = self.allowed_by(rule, where, text, span, identity=identity, track=True)
         if by:
             rec["allowed_by"] = by; self.allowed.append(rec); return "allowed"
         self.red.append(rec); return "red"
@@ -340,7 +467,7 @@ def scan_text(rules, res, where, text, inside):
     lines = text.splitlines() or [""]
     for i, line in enumerate(lines, 1):
         # a drive-letter path with forward slashes is R05's finding; R04 keeps quiet there only while R05 itself speaks
-        drive = [m.span() for m in rules.r05.finditer(line) if not res.allowed_by("R05", where, line, m.span())]
+        drive = [m.span() for m in rules.r05.finditer(line) if not res.allowed_by("R05", where, line, m.span(), legacy_only=True)]
         for rid, label, rx in rules.text:
             for m in rx.finditer(line):          # every match: a first one that is allowed must not hide the next
                 if not m.group(0) or (rid == "R04" and _inside(m.span(), drive)):
@@ -350,7 +477,9 @@ def scan_text(rules, res, where, text, inside):
                 if standin is not None:
                     res.hit(rid, label + ", stand-in user", where, i, line, _standin_shown(m.group(0), standin), tier="NOTE")
                 else:
-                    res.hit(rid, label, where, i, line, m.group(0), span=m.span(), value=_home_user(rid, m.group(0), after) or None)
+                    whole = home_value(rid, m.group(0), line[m.end():])
+                    res.hit(rid, label, where, i, line, whole, span=m.span(), value=_home_user(rid, m.group(0), after) or None,
+                            identity=whole if rid in {"R04", "R05"} else None)
         for m in ASSIGNED.finditer(line):
             val = m.group(2)
             if sum(c.isdigit() for c in val) >= 3 and not PLACEHOLDER.search(val):
@@ -423,6 +552,17 @@ BIN_WINDOW = 200        # bytes on either side of a binary hit that an allow REG
 BIN_LISTED = 20         # allowed occurrences listed per rule and file; the rest are still checked, just not listed
 
 
+def binary_home_after(data, offset, rid):
+    """Find the end of the account without repeatedly decoding the whole remaining binary."""
+    start = offset
+    separators = (47, 92) if rid == "R05" else (47,)
+    while start < len(data) and data[start] in separators:
+        start += 1
+    boundary = rb"[\\/\x00-\x1f]" if rid == "R05" else rb"[/\x00-\x1f]"
+    end = re.compile(boundary).search(data, start)
+    return data[offset:end.end() if end else len(data)].decode("utf-8", "surrogateescape")
+
+
 def scan_bytes(rules, res, where, data):
     """Every occurrence of a rule in a binary is judged on its own. The first one that is not allowed makes the file
     RED for that rule (later ones would not change that, so they are not listed); allowed ones, and home paths with a
@@ -432,7 +572,7 @@ def scan_bytes(rules, res, where, data):
         lo = max(0, m.start() - BIN_WINDOW)
         start = len(data[lo:m.start()].decode("utf-8", "surrogateescape"))
         return data[lo:m.end() + BIN_WINDOW].decode("utf-8", "surrogateescape"), (start, start + len(m.group(0).decode("utf-8", "surrogateescape")))
-    drive = [m.span() for m in rules.r05_b.finditer(data) if not res.allowed_by("R05", where, *window_of(m))]
+    drive = [m.span() for m in rules.r05_b.finditer(data) if not res.allowed_by("R05", where, *window_of(m), legacy_only=True)]
     for rid, label, rx in rules.bytes:
         listed = noted = 0
         for m in rx.finditer(data):
@@ -446,12 +586,15 @@ def scan_bytes(rules, res, where, data):
                     res.hit(rid, label + ", stand-in user (binary)", where, 0, "", _standin_shown(m.group(0).decode("latin-1"), standin), tier="NOTE")
                 continue
             window, span = window_of(m)
-            if listed >= BIN_LISTED and res.allowed_by(rid, where, window, span):
+            raw = m.group(0).decode("utf-8", "surrogateescape")
+            whole = home_value(rid, raw, binary_home_after(data, m.end(), rid)) if rid in {"R04", "R05"} else raw
+            if listed >= BIN_LISTED and res.allowed_by(rid, where, window, span, identity=whole, track=True):
                 continue
-            s = m.group(0)[:200].decode("utf-8", "replace")
+            s = whole if rid in {"R04", "R05"} else m.group(0)[:200].decode("utf-8", "replace")
             user = _home_user(rid, m.group(0).decode("latin-1"), after) or None
-            if res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window, value=user) == "red":
-                break
+            if res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window, value=user, identity=whole) == "red":
+                if not res.review_all_binary:
+                    break
             listed += 1
     m = rules.tool_b.search(data)
     if m:
@@ -466,7 +609,7 @@ def _pdf_streams(data):
             continue
 
 
-def _walk(name, data, depth):
+def _walk(name, data, depth, lineage=()):
     z = None
     if data[:2] == b"PK":
         try:
@@ -475,7 +618,7 @@ def _walk(name, data, depth):
             z = None
     if z is not None:
         if depth >= MAX_DEPTH:
-            yield (name or "file") + f" (archive nested deeper than {MAX_DEPTH}, not opened)", None, "skip"; return
+            yield (name or "file") + f" (archive nested deeper than {MAX_DEPTH}, not opened)", None, "skip", lineage; return
         members = []
         with z:
             try:
@@ -485,26 +628,30 @@ def _walk(name, data, depth):
                     inner = f"{name}::{info.filename}" if name else info.filename
                     members.append((inner, None if info.file_size > MAX_MEMBER else z.read(info), info.filename))
             except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError, EOFError) as e:
-                yield (name or "file") + f" (archive member unreadable: {type(e).__name__})", None, "skip"
+                yield (name or "file") + f" (archive member unreadable: {type(e).__name__})", None, "skip", lineage
         for inner, blob, member_name in members:
-            yield inner + " (member name)", member_name, "text"
+            member_scope = lineage + (member_name,)
+            yield inner + " (member name)", member_name, "text", member_scope
             if blob is None:
-                yield inner + f" (over {MAX_MEMBER >> 20} MB, not opened)", None, "skip"
+                yield inner + f" (over {MAX_MEMBER >> 20} MB, not opened)", None, "skip", member_scope
             else:
-                yield from _walk(inner, blob, depth + 1)
+                yield from _walk(inner, blob, depth + 1, member_scope)
         return
     if data[:5] == b"%PDF-":
-        yield name, data, "bytes"
+        yield name, data, "bytes", lineage
         for i, txt in _pdf_streams(data):
-            yield f"{name}::pdf-stream#{i}" if name else f"pdf-stream#{i}", txt, "pdftext"
+            yield f"{name}::pdf-stream#{i}" if name else f"pdf-stream#{i}", txt, "pdftext", lineage
         return
     if b"\x00" in data[:65536]:
-        yield name, data, "bytes"; return
-    yield name, data.decode("utf-8", "replace"), "text"
+        yield name, data, "bytes", lineage; return
+    yield name, data.decode("utf-8", "replace"), "text", lineage
 
 
 def scan_blob(rules, res, rel, data):
-    for member, payload, kind in _walk("", data, 0):
+    previous = res.scope
+    base_scope = previous if previous is not None else rel
+    for member, payload, kind, members in _walk("", data, 0):
+        res.scope = ("member", base_scope, members) if members else base_scope
         where = f"{rel}::{member}" if member else rel
         if kind == "skip":
             res.unscanned.append(where)
@@ -518,17 +665,24 @@ def scan_blob(rules, res, rel, data):
             else:
                 res.n_text += 1
             scan_text(rules, res, where, payload, inside=bool(member))
+    res.scope = previous
 
 
-def scan_tree(rules, root, allow, big_note=BIG_NOTE, big_red=BIG_RED):
+def scan_tree(rules, root, allow, big_note=BIG_NOTE, big_red=BIG_RED, allow_paths=(), review_all_binary=False):
     res, root = Result(allow), os.path.abspath(root)
+    res.review_all_binary = review_all_binary
+    active = {os.path.abspath(path) for path in allow_paths}
+    active.add(os.path.join(root, DEFAULT_ALLOW))
     for dp, dns, fns in os.walk(root):
         for d in list(dns):
             if d in JUNK_DIRS:
-                res.hit("R12", "cache/env directory", os.path.relpath(os.path.join(dp, d), root) + "/", 0, d, d)
+                rel = os.path.relpath(os.path.join(dp, d), root) + "/"
+                res.scope = rel
+                res.hit("R12", "cache/env directory", rel, 0, d, d)
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
         for f in sorted(fns):
             p, rel = os.path.join(dp, f), os.path.relpath(os.path.join(dp, f), root)
+            res.scope = rel
             res.n_files += 1
             if JUNK_FILES.search(f):
                 res.hit("R12", "junk file on the publish surface", rel, 0, f, f)
@@ -540,12 +694,15 @@ def scan_tree(rules, root, allow, big_note=BIG_NOTE, big_red=BIG_RED):
             except OSError as e:
                 res.unscanned.append(f"{rel} (unreadable: {type(e).__name__})"); continue
             if size >= big_red:
-                res.hit("R15", "file >= 100 MB (GitHub rejects)", rel, 0, f"{size} bytes", f"{size >> 20} MB")
+                res.hit("R15", "file >= 100 MB (GitHub rejects)", rel, 0, f"{size} bytes", f"{size >> 20} MB", identity=f"{size} bytes")
             elif size >= big_note:
                 res.hit("R15", "file >= 50 MB", rel, 0, f"{size} bytes", f"{size >> 20} MB", tier="NOTE")
             if IMAGE_EXT.search(f):
                 res.hit("R16", "image (look at it yourself)", rel, 0, f"{size} bytes", f"{size >> 10} KB", tier="NOTE")
+            if os.path.abspath(p) in active:
+                data = scan_allow_content(data)
             scan_blob(rules, res, rel, data)
+    res.scope = None
     return res
 
 
@@ -570,22 +727,69 @@ def scan_git_range(rules, repo, rng, res):
     for sha in shas:
         an, ae, cn, ce = _git(repo, "log", "-1", "--format=%an%n%ae%n%cn%n%ce", sha).split("\n")[:4]
         for who, name, mail in (("author", an, ae), ("committer", cn, ce)):
+            res.scope = ("git-metadata", sha, who)
             if rules.authors and mail not in rules.authors:
                 res.hit("R17", f"{who} e-mail not in allowed_author_emails", f"commit {sha[:7]}", 0, f"{who}: {mail}", mail)
             scan_text(rules, res, f"commit {sha[:7]} ({who})", f"{name} <{mail}>", inside=False)
+        res.scope = ("git-message", sha)
         scan_text(rules, res, f"commit {sha[:7]} (message)", _git(repo, "log", "-1", "--format=%B", sha), inside=False)
         raw = _git(repo, "diff-tree", "--root", "-r", "-m", "--no-commit-id", "--raw", "--diff-filter=AM", sha)
         for line in raw.splitlines():
             if not line.startswith(":"):
                 continue
             meta, _, path = line.partition("\t")
+            res.scope = ("git-file", sha, path)
             n_blobs += 1
             scan_text(rules, res, f"{sha[:7]}:{path} (file name)", path, inside=False)
             scan_blob(rules, res, f"{sha[:7]}:{path}", _git(repo, "cat-file", "blob", meta.split()[3], binary=True))
+    res.scope = None
     return len(shas), n_blobs
 
 
 RULE_LIST = re.compile(r"[RU]\d\d(?:,[RU]\d\d)*")
+
+
+def parse_digest(it):
+    parts = it.split(" ")
+    if len(parts) != 4:
+        raise ValueError("digest entry needs SHA256 RULE FILE_DIGEST VALUE_DIGEST")
+    prefix, rule, path, digest = parts
+    if prefix not in {"SHA256", "SHA256-WIDE"} or not re.fullmatch(r"[RU]\d\d", rule):
+        raise ValueError("digest entry needs one rule ID")
+    wide = prefix == "SHA256-WIDE"
+    if wide and path != "*":
+        raise ValueError("SHA256-WIDE requires * (all files, this rule and value only)")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest) or (not wide and not re.fullmatch(r"[0-9a-f]{64}", path)):
+        raise ValueError("digest entry needs full lowercase SHA-256 digests")
+    return DigestEntry(rule, path, digest, wide, hashed_path=True)
+
+
+def has_inline_allow_comment(regex):
+    """A whitespace-prefixed hash outside escapes and character classes is a comment."""
+    i = 0
+    while i < len(regex):
+        if regex[i] == "\\":
+            i += 2
+            continue
+        if regex[i] == "[":
+            i += 1
+            if i < len(regex) and regex[i] == "^":
+                i += 1
+            if i < len(regex) and regex[i] == "]":
+                i += 1  # A leading ] is a literal character in the class.
+            while i < len(regex):
+                if regex[i] == "\\":
+                    i += 2
+                elif regex[i] == "]":
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        if regex[i] == "#" and i > 0 and regex[i - 1].isspace():
+            return True
+        i += 1
+    return False
 
 
 def parse_allow(items, path):
@@ -593,8 +797,11 @@ def parse_allow(items, path):
     list of rule IDs is read as the three-field form; REGEX may itself contain '::'."""
     out, raw = [], list(items or [])
     if path:
-        raw += [l.strip() for l in open(path, encoding="utf-8") if l.strip() and not l.startswith("#")]
+        with open(path, encoding="utf-8") as fh:
+            raw += [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
     for it in raw:
+        if it.startswith(("SHA256 ", "SHA256-WIDE ")) and "::" not in it:
+            out.append(parse_digest(it)); continue
         head, sep, rest = it.partition("::")
         if RULE_LIST.fullmatch(head) and "::" in rest:
             glob, _, rx = rest.partition("::")
@@ -603,8 +810,435 @@ def parse_allow(items, path):
             glob, rx, rules_ok = head, rest, None
         if not sep or not glob or not rx:
             raise ValueError(f"allow entry needs RULES::GLOB::REGEX or GLOB::REGEX: {it}")
-        out.append((rules_ok, glob, re.compile(rx)))
+        if has_inline_allow_comment(rx):
+            raise ValueError("inline allow comments are not supported; put the comment on its own line")
+        try:
+            compiled = re.compile(rx)
+        except re.error as e:
+            raise ValueError(f"invalid allow regex: {e}") from None
+        out.append((rules_ok, glob, compiled))
     return out
+
+
+def scan_allow_content(data):
+    """Only validated digest entry bodies in the active allow file are structural.
+    Comments, legacy entries and other bytes retain their scan offsets and rules."""
+    out = []
+    for line in data.splitlines(keepends=True):
+        try:
+            text = line.decode("utf-8").strip()
+            if text.startswith(("SHA256 ", "SHA256-WIDE ")) and "::" not in text:
+                parse_digest(text)
+                line = bytes(32 if c not in (10, 13) else c for c in line)
+        except (UnicodeError, ValueError):
+            pass
+        out.append(line)
+    return b"".join(out)
+
+
+def append_approvals(path, approvals):
+    """Append only; leave every previous byte in place, including legacy entries."""
+    dated = datetime.date.today().isoformat()
+    prefix = ""
+    if os.path.exists(path) and os.path.getsize(path):
+        with open(path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                prefix = "\n"
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(prefix)
+        for entry, reason in approvals:
+            fh.write(f"# {dated} — {reason}\n{entry}\n")
+
+
+def select_approvals(res, approved, reason, interactive=False, across_files=False, ask=input):
+    """Nonterminal callers must name each current finding by its supplied entry."""
+    groups = settle_groups(res.red)
+    available = {r["settle_entry"] for r, _, _ in groups}
+    if not interactive:
+        if not approved or not reason or not reason.strip():
+            raise ValueError("--approve requires named findings and a nonempty --reason")
+        if any(e not in available for e in approved):
+            raise ValueError("--approve must name a current RED finding using its exact settle entry")
+    choices = []
+    for row, count, _ in groups:
+        entry = row["settle_entry"]
+        why = reason
+        if interactive:
+            print_finding(row, count, 1, settlement=True)
+            answer = ask("Approve this finding as intentional? [y/N] ").strip().lower()
+            if answer in {"", "n", "no"}:
+                continue
+            if answer not in {"y", "yes"}:
+                raise ValueError("invalid selection; answer yes or no; nothing was appended")
+            why = ask("Reason: ").strip()
+            if not why:
+                raise ValueError("approval needs a nonempty reason; nothing was appended")
+        elif entry not in approved:
+            continue
+        if "\n" in why or "\r" in why or not why.strip():
+            raise ValueError("approval reason must be one nonempty line")
+        if across_files:
+            parsed = parse_digest(entry)
+            entry = str(DigestEntry(parsed.rule, "*", parsed.digest, True))
+        if entry not in {e for e, _ in choices}:
+            choices.append((entry, why.strip()))
+    return choices
+
+
+def print_finding(row, count=1, files=1, settlement=False):
+    by = f"   allowed by {safe_excerpt(row['allowed_by'])}" if "allowed_by" in row else ""
+    repeated = f"   × {count} in {_n(files, 'file')}, the first is shown" if count > 1 else ""
+    print(f"  [{row['rule']} {row['label']}] {safe_excerpt(row['where'])}:{row['line']}  {row['match']}   | {row['excerpt'][:120]}{by}{repeated}")
+    if "source" in row:
+        print(f"    source file: {row['source']}")
+    if settlement:
+        print(f"    {row['real_if']}")
+        print(f"    settle: {row['settle_entry']}")
+
+
+def print_report(res):
+    for title, rows in (("RED", res.red), ("ALLOWED", res.allowed), ("NOTE", res.note)):
+        shown = settle_groups(rows) if title == "RED" else printed(rows)
+        repeats = "" if len(shown) == len(rows) else f", printed as {_n(len(shown), 'line')}: repeats folded, --json lists every place"
+        print(f"{title} ({len(rows)}{repeats}):")
+        for row, count, files in shown:
+            print_finding(row, count, len(files), settlement=title == "RED")
+    print(f"UNSCANNED ({len(res.unscanned)}):" + ("" if res.unscanned else " none"))
+    for path in res.unscanned:
+        print(f"  {path}")
+    for entry in res.allow:
+        text = entry_text(entry)
+        if not isinstance(entry, DigestEntry) or entry.wide:
+            print(f"WIDE allow ({'legacy regex can cover multiple values' if not isinstance(entry, DigestEntry) else 'all files; one rule and value'}): {safe_excerpt(text)}")
+        if text not in res.used:
+            print(f"UNUSED allow: {safe_excerpt(text)}")
+    print(f"verdict: {'🔴 RED — do not publish' if res.red else '🟢 GREEN — NOTE items still need a human look'}")
+
+
+def load_allow_sources(root, items=None, explicit=None, ignore_default=False, settling=False):
+    paths, inventories = [], []
+    default = os.path.join(root, DEFAULT_ALLOW) if root else None
+    if default and not ignore_default and os.path.isfile(default):
+        paths.append(default)
+    if explicit and not any(os.path.abspath(p) == os.path.abspath(explicit) for p in paths):
+        paths.append(explicit)
+    allow = parse_allow(items, None)
+    for path in paths:
+        entries = [] if settling and not os.path.exists(path) else parse_allow([], path)
+        allow.extend(entries); inventories.append((path, len(entries)))
+    return allow, paths, inventories
+
+
+def settling_selftest(check):
+    """Regression checks for 0.1.8; synthetic keys are always constructed at runtime."""
+    rules = Rules({})
+    def hits(text, where="sample.md", allow=(), binary=False, cfg=None, scope=None):
+        res = Result(allow)
+        res.review_all_binary = True
+        res.scope = scope
+        selected = Rules(cfg) if cfg is not None else rules
+        if binary:
+            scan_bytes(selected, res, where, text)
+        else:
+            scan_text(selected, res, where, text, inside=False)
+        return res
+    def rejected(call):
+        try:
+            call()
+        except ValueError:
+            return True
+        except re.error:
+            return False
+        return False
+    def captured(call):
+        old, sys.stdout = sys.stdout, io.StringIO()
+        try:
+            call(); return sys.stdout.getvalue()
+        finally:
+            sys.stdout = old
+
+    home = "\x2fhome\x2f"
+    text = home + "alice/x " + home + "alicewong/x"
+    res = hits(text)
+    entry = res.red[0]["settle_entry"]
+    approved = parse_allow([entry], None)
+    second = hits(text, allow=approved)
+    check(len(second.allowed) == 1 and len(second.red) == 1 and second.red[0]["match"] == home + "alicewong",
+          "0.1.8 exact home approval never covers a longer account on the same line")
+    check(hits(home + "alice/z", where="other.md", allow=approved).red != [],
+          "0.1.8 exact approval never covers an unreviewed file")
+    check(not hits("new heading\n" + home + "alice/x\n" + home + "alice/z", allow=approved).red,
+          "0.1.8 same value in the same file survives line moves and repeats")
+    check(len(settle_groups(hits(home + "alice/x\n" + home + "alice/y").red)) == 1,
+          "0.1.8 same file and value needs one decision")
+    combined = hits(home + "alice/x"); combined.red.extend(hits(home + "alice/y", where="other.md").red)
+    check(len(settle_groups(combined.red)) == 2,
+          "0.1.8 same value in two files needs two decisions")
+    unusual = 'docs/space # and :: and "quotes".md'
+    ur = hits(text, where=unusual)
+    ua = parse_allow([ur.red[0]["settle_entry"]], None)
+    check(len(hits(text, where=unusual, allow=ua).allowed) == 1,
+          "0.1.8 copied entry handles spaces, hash, separators and quotes in a literal path")
+    decorated = hits(home + "alice/x " + home + "alice[work]/x")
+    da = parse_allow([decorated.red[0]["settle_entry"]], None)
+    check(len(hits(home + "alice/x " + home + "alice[work]/x", allow=da).red) == 1
+          and decorated.red[1]["match"] == home + "alice[work]",
+          "0.1.8 punctuation in a delimited account folder cannot widen an approval")
+    bare = hits(home + "alice\n" + home + "alice wong")
+    bare_allow = parse_allow([bare.red[0]["settle_entry"]], None)
+    check(len(hits(home + "alice\n" + home + "alice wong", allow=bare_allow).red) == 1
+          and bare.red[1]["match"] == home + "alice wong",
+          "0.1.8 a spaced terminal account cannot share a shorter account approval")
+    slash = hits(home + "alice/x\n" + home + "alice\\extra/x")
+    slash_allow = parse_allow([slash.red[0]["settle_entry"]], None)
+    check(len(hits(home + "alice/x\n" + home + "alice\\extra/x", allow=slash_allow).red) == 1,
+          "0.1.8 Unix account backslashes are literal rather than Windows separators")
+    check(res.red[0]["match"] == home + "alice" and hits("\x2fUsers\x2fAlice Wong/x").red[0]["match"] == "\x2fUsers\x2fAlice Wong",
+          "0.1.8 prints the whole Linux and macOS user folder")
+    windows_home = "C:\x5cUsers\x5c" + "Alice Wong"
+    windows = windows_home + "\\x"
+    check(hits(windows).red[0]["match"] == windows_home,
+          "0.1.8 prints the whole Windows user folder")
+    check(hits(home + "Alice/x").red != [], "0.1.8 uppercase Linux account is RED in text")
+    check(hits(("\x00" + home + "Alice/x").encode(), binary=True).red != [],
+          "0.1.8 uppercase Linux account is RED in binary")
+    check(hits(home + "USER/x").note != [] and not hits(home + "USER/x").red,
+          "0.1.8 uppercase Linux stand-in keeps the existing NOTE policy")
+    check(len(hits(text, allow=parse_allow(["R04::sample.md::" + home + "alice"], None)).allowed) == 2,
+          "0.1.8 legacy regex still covers prefixes exactly as before")
+    phone = "(604) " + "284-" + "3917"
+    check(not hits(phone, allow=parse_allow(["sample.md::.*"], None)).red,
+          "0.1.8 legacy two-part any-rule form keeps working")
+    check(len(parse_allow(["SHA256::.*", 'SHA256 R04 "name::value"::.*'], None)) == 2,
+          "0.1.8 digest syntax does not reserve any accepted legacy glob name")
+    for value, label in [(phone, "phone brackets"), ("member42@" + "acme.com", "masked e-mail")]:
+        r = hits(value, where="docs/[draft]*?.md")
+        a = parse_allow([r.red[0]["settle_entry"]], None)
+        check(not hits(value, where="docs/[draft]*?.md", allow=a).red,
+              f"0.1.8 copied digest works for {label} without escaping")
+        check(hits(value, where="docs/draftXYZ.md", allow=a).red != [],
+              f"0.1.8 path glob characters are literal for {label}")
+    key = "sk-" + "A7b9" * 6
+    key2 = "sk-" + "A7b9" * 5 + "C8d0"
+    r = hits(key + " " + key2)
+    e = r.red[0]["settle_entry"]
+    a = parse_allow([e], None)
+    s = hits(key + " " + key2, allow=a)
+    check(len(s.allowed) == 1 and len(s.red) == 1,
+          "0.1.8 same prefix and length secret stays RED after approving another")
+    check(key not in e and key not in json.dumps(public(r.red)) and key2 not in json.dumps(public(r.red)),
+          "0.1.8 full secrets are absent from digest entries, excerpts and JSON")
+    kr = hits(key, where=key + ".txt")
+    check(key not in kr.red[0]["settle_entry"] and key not in captured(lambda: print_report(kr)),
+          "0.1.8 a secret-shaped filename is masked and never copied into an allow entry")
+    mail = "member42@" + "acme.com"
+    m = hits(mail)
+    check(mail not in json.dumps(public(m.red)), "0.1.8 full e-mail remains masked in excerpts and JSON")
+    check(len(parse_digest(e).digest) == 64, "0.1.8 generated approvals use full SHA-256")
+    check(rejected(lambda: parse_allow([e[:-1]], None)), "0.1.8 truncated digests are refused")
+    check(rejected(lambda: parse_allow([e + "junk"], None)), "0.1.8 digest trailing material is refused")
+    long_key = "sk-" + "Q4r6" * 70
+    br = hits(("\x00" + long_key).encode(), binary=True)
+    ba = parse_allow([br.red[0]["settle_entry"]], None)
+    check(not hits(("\x00" + long_key).encode(), allow=ba, binary=True).red
+          and hits(("\x00" + long_key + "Z").encode(), allow=ba, binary=True).red != [],
+          "0.1.8 binary digest uses the complete value beyond the display limit")
+    bad_home = b"\x00\x2fhome\x2falice\x80/x"
+    bad_res = hits(bad_home, binary=True)
+    try:
+        json.dumps(public(bad_res.red), ensure_ascii=False).encode("utf-8")
+        binary_display_ok = True
+    except UnicodeError:
+        binary_display_ok = False
+    bad_allow = parse_allow([bad_res.red[0]["settle_entry"]], None)
+    check(binary_display_ok and not hits(bad_home, allow=bad_allow, binary=True).red,
+          "0.1.8 undecodable binary account bytes remain digestible and printable")
+    fw = hits("C:\x2fUsers\x2fAlice/x")
+    fa = parse_allow([fw.red[0]["settle_entry"]], None)
+    check(not hits("C:\x2fUsers\x2fAlice/x", allow=fa).red,
+          "0.1.8 exact R05 approval preserves single-rule forward-slash reporting")
+    check(rejected(lambda: parse_allow(["sample.md::.*   # comment"], None)),
+          "0.1.8 inline comment is explicitly refused, never silently ignored")
+    def legacy_hash_works(where, text, regex):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "allow")
+            for prefix in ("", "R04::"):
+                item = prefix + where + "::" + regex
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(item + "\n")
+                try:
+                    sources = (parse_allow([item], None), parse_allow([], path))
+                except ValueError:
+                    return False
+                for entries in sources:
+                    result = hits(text, where=where, allow=entries)
+                    if result.red or len(result.allowed) != 1:
+                        return False
+        return True
+    check(legacy_hash_works("guide # reviewed.md", home + "qfixture/work", "[/]home/qfixture/"),
+          "0.1.8 legacy hash in a filename works in both forms, from arguments and files")
+    check(legacy_hash_works("guide.md", home + "qfixture/ work", "[/]home/qfixture/[ #]"),
+          "0.1.8 legacy hash in a regex character class works in both forms, from arguments and files")
+    check(rejected(lambda: parse_allow(["sample.md::["], None)),
+          "0.1.8 invalid regex becomes a usage error rather than a traceback")
+    for location in ("book.xlsx::nested.zip::doc.xml", "doc.pdf::pdf-stream#1", "commit abcdef0 (author)"):
+        cr = hits(key, where=location)
+        ca = parse_allow([cr.red[0]["settle_entry"]], None)
+        check(not hits(key, where=location, allow=ca).red
+              and hits(key2, where=location, allow=ca).red != [],
+              f"0.1.8 copied exact approval works at {location}")
+    unused = captured(lambda: print_report(Result(approved)))
+    check("UNUSED allow: " + entry in unused, "0.1.8 unused entry is named in report")
+    legacy = captured(lambda: print_report(Result(parse_allow(["sample.md::.*"], None))))
+    check("WIDE allow (legacy regex" in legacy, "0.1.8 legacy class-wide regex is visible as wide")
+    wide = select_approvals(res, [entry], "invented example", across_files=True)[0][0]
+    wa = parse_allow([wide], None)
+    check(not hits(home + "alice/x", where="other.md", allow=wa).red
+          and hits(home + "alicewong/x", where="other.md", allow=wa).red != [],
+          "0.1.8 explicit all-files scope still covers only one exact value and rule")
+    check("WIDE allow (all files" in captured(lambda: print_report(Result(wa))),
+          "0.1.8 all-files digest scope is visible as wide")
+    check(rejected(lambda: select_approvals(res, [str(DigestEntry("R04", "sample.md", "0" * 64))], "reason")),
+          "0.1.8 nonterminal caller must name a current RED finding")
+    check(rejected(lambda: select_approvals(res, [], "reason")), "0.1.8 no approve-everything or empty selection")
+    check(rejected(lambda: select_approvals(res, [entry], "")), "0.1.8 nonterminal approval requires a reason")
+    check(rejected(lambda: select_approvals(res, [entry], "reason\ninjected entry")),
+          "0.1.8 multiline reasons cannot inject allow entries")
+    ga = hits(key, where="abcdef0:note.txt", scope=("git-file", "abcdef0" + "1" * 33, "note.txt"))
+    gap = parse_allow([ga.red[0]["settle_entry"]], None)
+    check(hits(key, where="abcdef0:note.txt", scope=("git-file", "abcdef0" + "2" * 33, "note.txt"), allow=gap).red != [],
+          "0.1.8 full commit identity prevents abbreviated-history path aliases")
+    answers = iter(["yes", "invented account", "no", "unapproved extra reason"])
+    old, sys.stdout = sys.stdout, io.StringIO()
+    try:
+        choices = select_approvals(res, None, None, interactive=True, ask=lambda _: next(answers))
+        display = sys.stdout.getvalue()
+    finally:
+        sys.stdout = old
+    check(choices == [(entry, "invented account")] and "Real if" in display and "sample.md:1" in display,
+          "0.1.8 terminal pass shows context, asks each decision once and keeps a no RED")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, DEFAULT_ALLOW)
+        previous = b"# existing decision\n"
+        with open(path, "wb") as fh:
+            fh.write(previous)
+        answers = iter(["yes", "invented account", "maybe"])
+        old, sys.stdout = sys.stdout, io.StringIO()
+        try:
+            choices = select_approvals(res, None, None, interactive=True, ask=lambda _: next(answers))
+            append_approvals(path, choices)
+            aborted = False
+        except ValueError:
+            aborted = True
+        finally:
+            sys.stdout = old
+        with open(path, "rb") as fh:
+            unchanged = fh.read() == previous
+        check(aborted and unchanged,
+              "0.1.8 invalid terminal answer after an earlier yes aborts without appending")
+    large = Result([]); large.hit("R15", "file >= 100 MB (GitHub rejects)", "huge.dat", 0, "104857600 bytes", "100 MB")
+    la = parse_allow([large.red[0]["settle_entry"]], None)
+    lr = Result(la); lr.hit("R15", "file >= 100 MB (GitHub rejects)", "huge.dat", 0, "104857600 bytes", "100 MB")
+    check(not lr.red and len(lr.allowed) == 1, "0.1.8 non-text size findings can be settled too")
+    junk = Result([]); junk.hit("R12", "cache/env directory", "__pycache__/", 0, "__pycache__", "__pycache__")
+    ja = parse_allow([junk.red[0]["settle_entry"]], None)
+    jr = Result(ja); jr.hit("R12", "cache/env directory", "__pycache__/", 0, "__pycache__", "__pycache__")
+    check(not jr.red, "0.1.8 directory findings can be settled too")
+    with tempfile.TemporaryDirectory() as d:
+        alias_root = os.path.join(d, "aliases")
+        os.mkdir(alias_root)
+        with open(os.path.join(alias_root, "container.zip"), "wb") as fh:
+            fh.write(_make_zip([("note.txt", key.encode())]))
+        with open(os.path.join(alias_root, "container.zip::note.txt"), "w") as fh:
+            fh.write(key)
+        ar = scan_tree(rules, alias_root, [])
+        aa = parse_allow([ar.red[0]["settle_entry"]], None)
+        after_alias = scan_tree(rules, alias_root, aa)
+        check(len(after_alias.allowed) == 1 and len(after_alias.red) == 1,
+              "0.1.8 literal archive-like filenames cannot alias a different member file")
+        nested_root = os.path.join(d, "nested-aliases")
+        os.mkdir(nested_root)
+        with open(os.path.join(nested_root, "container.zip"), "wb") as fh:
+            fh.write(_make_zip([("inner.zip::note.txt", key.encode()),
+                                ("inner.zip", _make_zip([("note.txt", key.encode())]))]))
+        nr = scan_tree(rules, nested_root, [])
+        na = parse_allow([nr.red[0]["settle_entry"]], None)
+        after_nested = scan_tree(rules, nested_root, na)
+        check(len(after_nested.allowed) == 1 and len(after_nested.red) == 1,
+              "0.1.8 nested archive member sequences cannot alias separator-bearing member names")
+        pdf_data = b"%PDF-1.4\n" + (b"stream\n" + zlib.compress(key.encode()) + b"\nendstream\n") * 2
+        pdf = Result([]); scan_blob(rules, pdf, "same.pdf", pdf_data)
+        pdf_allow = parse_allow([pdf.red[0]["settle_entry"]], None)
+        pdf_after = Result(pdf_allow); scan_blob(rules, pdf_after, "same.pdf", pdf_data)
+        check(len(settle_groups(pdf.red)) == 1 and not pdf_after.red and len(pdf_after.allowed) == 2,
+              "0.1.8 same value in multiple PDF streams needs one file-scoped decision")
+        d = os.path.join(d, "allow-tests")
+        os.mkdir(d)
+        path = os.path.join(d, DEFAULT_ALLOW)
+        with open(path, "w") as fh:
+            fh.write("  # indented comment\n")
+        try:
+            comments_ok = parse_allow([], path) == []
+        except ValueError:
+            comments_ok = False
+        check(comments_ok, "0.1.8 indented allow comments are accepted")
+        with open(path, "w") as fh:
+            fh.write("# existing decision without a trailing newline")
+        previous = open(path, "rb").read()
+        append_approvals(path, [(entry, "invented account")])
+        contents = open(path, "rb").read()
+        check(contents.startswith(previous) and datetime.date.today().isoformat().encode() in contents
+              and b"invented account" in contents and contents[len(previous):].startswith(b"\n#"),
+              "0.1.8 append preserves old bytes and adds date and reason")
+        allow, paths, inventory = load_allow_sources(d)
+        check(len(allow) == 1 and inventory == [(path, 1)], "0.1.8 default allow file is loaded and counted")
+        check(load_allow_sources(d, ignore_default=True) == ([], [], []),
+              "0.1.8 ignore-default flag disables default loading")
+        with open(os.path.join(d, "sample.md"), "w") as fh:
+            fh.write(home + "alice/x")
+        tree = scan_tree(rules, d, allow, allow_paths=paths)
+        check(not tree.red and len(tree.allowed) == 1, "0.1.8 generated allow file scans clean and settles its target")
+        with open(path, "a") as fh:
+            fh.write("# " + key + "\n")
+        check(any(x["rule"] == "R07" and x["where"] == DEFAULT_ALLOW for x in scan_tree(rules, d, allow, allow_paths=paths).red),
+              "0.1.8 key pasted into an allow comment stays RED")
+        marker = "1" * 64
+        personal_entry = str(DigestEntry("U01", "janedoe1987.md", marker))
+        structural_rules = Rules({"identifiers": [marker]})
+        with open(path, "w") as fh:
+            fh.write(personal_entry + "\n# " + marker + "\n")
+        pr = scan_tree(structural_rules, d, parse_allow([], path), allow_paths=[path])
+        check(sum(x["rule"] == "U01" for x in pr.red) == 1
+              and all(x["line"] == 2 for x in pr.red if x["rule"] == "U01"),
+              "0.1.8 only validated digest bodies are structural; comments retain scan line numbers")
+        with open(os.path.join(d, "ordinary.txt"), "w") as fh:
+            fh.write(personal_entry)
+        pr = scan_tree(structural_rules, d, parse_allow([], path), allow_paths=[path])
+        check(any(x["where"] == "ordinary.txt" and x["rule"] == "U01" for x in pr.red),
+              "0.1.8 digest-looking text outside an active allow file is still scanned")
+        size_root = os.path.join(d, "size")
+        os.mkdir(size_root)
+        sized = os.path.join(size_root, "sized.dat")
+        with open(sized, "wb") as fh:
+            fh.write(b"12345678")
+        sr = scan_tree(rules, size_root, [], big_red=4)
+        sa = parse_allow([sr.red[0]["settle_entry"]], None)
+        check(not scan_tree(rules, size_root, sa, big_red=4).red,
+              "0.1.8 actual size finding round-trips through a copied approval")
+        with open(sized, "ab") as fh:
+            fh.write(b"9")
+        check(len(scan_tree(rules, size_root, sa, big_red=4).red) == 1,
+              "0.1.8 size digest covers exact bytes rather than rounded megabytes")
+        proc = subprocess.run([sys.executable, os.path.abspath(__file__), d, "--allow-file", os.path.join(d, "absent.allow")],
+                              capture_output=True, text=True)
+        check(proc.returncode == 2 and len(proc.stdout.splitlines()) == 1 and not proc.stderr
+              and "allow error:" in proc.stdout and "Traceback" not in proc.stdout,
+              "0.1.8 missing allow file gives one usage-error line and exit 2")
+        proc = subprocess.run([sys.executable, os.path.abspath(__file__), d, "--settle"],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        check(proc.returncode == 2 and "--approve" in proc.stdout and not proc.stderr,
+              "0.1.8 agents without a terminal are directed to named approvals")
 
 
 # ───────────── selftest: same functions as the real run; one sample per rule; a clean control ─────────────
@@ -954,6 +1588,7 @@ def selftest():
         check("R07" in rules_hits, f"a deleted secret is still found in history → R07 (got {sorted(rules_hits)})")
         check("R17" in rules_hits and "R10" in rules_hits, "a gmail author → R17 + R10")
         check(not scan_tree(rules, d, []).red, "the working tree itself (key deleted) is 0 RED")
+    settling_selftest(check)
     return ok, lines
 
 
@@ -961,6 +1596,11 @@ def main():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("dir", nargs="?"); ap.add_argument("--config"); ap.add_argument("--allow", action="append")
     ap.add_argument("--allow-file"); ap.add_argument("--git-range"); ap.add_argument("--json")
+    ap.add_argument("--ignore-default-allow", action="store_true")
+    ap.add_argument("--settle", action="store_true")
+    ap.add_argument("--approve", action="append")
+    ap.add_argument("--reason")
+    ap.add_argument("--scope-all-files", action="store_true")
     ap.add_argument("--note-scripts", action="store_true"); ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--init-config"); ap.add_argument("-h", "--help", action="store_true")
     a = ap.parse_args()
@@ -971,9 +1611,24 @@ def main():
             print(f"refusing to overwrite {a.init_config}"); return 2
         os.makedirs(os.path.dirname(os.path.abspath(a.init_config)), exist_ok=True)
         json.dump(CONFIG_TEMPLATE, open(a.init_config, "w"), indent=2); print(f"template written: {a.init_config} — fill it, keep it outside every repo"); return 0
+    settling = a.settle or bool(a.approve)
+    if a.settle and a.approve:
+        print("choose --settle or --approve, not both"); return 2
+    if a.settle and not sys.stdin.isatty():
+        print("--settle needs a terminal; agents must use --approve ENTRY --reason TEXT for each approved finding"); return 2
+    if (a.scope_all_files or a.reason) and not settling:
+        print("--scope-all-files and --reason require --settle or --approve"); return 2
+    if settling and a.ignore_default_allow and not a.allow_file:
+        print("settling with --ignore-default-allow requires an explicit --allow-file destination"); return 2
+    default = os.path.join(a.dir, DEFAULT_ALLOW) if a.dir else None
+    try:
+        allow, paths, inventories = load_allow_sources(a.dir, a.allow, a.allow_file,
+                                                      a.ignore_default_allow, settling)
+    except (ValueError, OSError, UnicodeError) as e:
+        print(f"allow error: {e}"); return 2
     ok, lines = selftest()
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"publish_gate selftest · {stamp} · {sum(l.startswith('  ✔') for l in lines)}/{len(lines)} passed")
+    print(f"publish_gate {VERSION} selftest · {stamp} · {sum(l.startswith('  ✔') for l in lines)}/{len(lines)} passed")
     if not ok or a.selftest:
         print("\n".join(lines))
         if not ok:
@@ -981,30 +1636,49 @@ def main():
         return 0
     if not a.dir:
         print(__doc__); return 2
-    cfg, cfg_path = load_config(a.config)
-    rules = Rules(cfg, a.note_scripts)
     try:
-        allow = parse_allow(a.allow, a.allow_file)
-    except ValueError as e:
+        if not os.path.isdir(a.dir):
+            raise ValueError(f"scan directory does not exist: {a.dir}")
+        cfg, cfg_path = load_config(a.config)
+        rules = Rules(cfg, a.note_scripts)
+    except (ValueError, OSError, UnicodeError) as e:
+        print(f"usage error: {e}"); return 2
+    def scan(entries, active):
+        result = scan_tree(rules, a.dir, entries, allow_paths=active, review_all_binary=settling)
+        if a.git_range:
+            result.git_counts = scan_git_range(rules, a.dir, a.git_range, result)
+        return result
+    try:
+        res = scan(allow, paths)
+    except RuntimeError as e:
         print(e); return 2
-    res = scan_tree(rules, a.dir, allow)
     print(f"config: {cfg_path or 'none (built-in rules only — your own identifiers are NOT being checked)'}")
+    for path, count in inventories:
+        print(f"allow file: {path} · {count} {'entry' if count == 1 else 'entries'} read")
     if a.git_range:
-        n_c, n_b = scan_git_range(rules, a.dir, a.git_range, res)
+        n_c, n_b = res.git_counts
         print(f"git range {a.git_range}: {_n(n_c, 'commit')}, {_n(n_b, 'blob')} scanned")
+    if a.scope_all_files:
+        print("settling scope: WIDE — all files, only each named rule and exact value")
     print(f"scanned {a.dir}: {_n(res.n_files, 'file')} · {res.n_text} text · {res.n_bytes} binary · {_n(res.n_members, 'archive member name')} · {_n(res.n_pdf, 'PDF stream')}")
-    for title, rows in (("RED", res.red), ("ALLOWED", res.allowed), ("NOTE", res.note)):
-        shown = printed(rows)
-        repeats = "" if len(shown) == len(rows) else f", printed as {_n(len(shown), 'line')}: a repeated value is one line with its count, --json lists every place"
-        print(f"{title} ({len(rows)}{repeats}):")
-        for r, count, files in shown:
-            print(f"  [{r['rule']} {r['label']}] {r['where']}:{r['line']}  {r['match']}   | {r['excerpt'][:120]}" + (f"   allowed by {r['allowed_by']}" if 'allowed_by' in r else "")
-                  + (f"   × {count} in {_n(len(files), 'file')}, the first is shown" if count > 1 else ""))
-    print(f"UNSCANNED ({len(res.unscanned)}):" + ("" if res.unscanned else " none"))
-    for u in res.unscanned:
-        print(f"  {u}")
+    if not a.settle:
+        print_report(res)
+    if settling:
+        try:
+            choices = select_approvals(res, a.approve, a.reason, interactive=a.settle,
+                                       across_files=a.scope_all_files)
+            destination = a.allow_file or default
+            if choices:
+                append_approvals(destination, choices)
+                if destination not in paths:
+                    paths.append(destination)
+                allow.extend(parse_allow([entry for entry, _ in choices], None))
+            print(f"settling: appended {len(choices)} entries to {destination}")
+            res = scan(allow, paths)
+            print_report(res)
+        except (ValueError, OSError, UnicodeError, EOFError, RuntimeError) as e:
+            print(f"settling error: {e}"); return 2
     verdict = "RED" if res.red else "GREEN"
-    print(f"verdict: {'🔴 RED — do not publish' if res.red else '🟢 GREEN — NOTE items still need a human look'}")
     if a.json:
         json.dump({"stamp": stamp, "dir": os.path.abspath(a.dir), "config": cfg_path, "git_range": a.git_range, "red": public(res.red),
                    "allowed": public(res.allowed), "note": public(res.note), "unscanned": res.unscanned, "verdict": verdict}, open(a.json, "w"), indent=1, ensure_ascii=False)

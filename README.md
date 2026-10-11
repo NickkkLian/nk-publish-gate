@@ -2,7 +2,7 @@
 
 An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](https://developers.openai.com/codex). A privacy gate to run before anything goes public (a repo, a release zip, a demo folder, a PDF): it finds what is private but is not a secret, such as a home-directory path inside an xlsx, a username in a .pyc or a personal address in the commit history.
 
-**What you get.** Two things that are private and are not secrets, so a secret scanner has no rule for them: a home-directory path in a text file inside a zip inside an xlsx, and the path a `.pyc` records for the file it was compiled from. A real run of nk-publish-gate 0.1.7 on 2026-10-09:
+**What you get.** Two things that are private and are not secrets, so a secret scanner has no rule for them: a home-directory path in a text file inside a zip inside an xlsx, and the path a `.pyc` records for the file it was compiled from. A real run of nk-publish-gate 0.1.8 on 2026-10-10:
 
 ![nk-publish-gate: a real run. RED (4): a cache folder; a home path in a text file inside a zip inside an xlsx; a .pyc; and the home path that .pyc records for the file it was compiled from. Verdict: RED, do not publish](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/results/nk-publish-gate.png)
 
@@ -17,7 +17,7 @@ Part of [nickkk-skills](https://github.com/NickkkLian/nickkk-skills) — skills 
 
 ## What RED meant on 20 real repositories
 
-The gate was run on 20 public skill repositories, cloned on 2026-10-08: the most-starred public repositories under a few GitHub topics for agent skills, with a size limit, chosen by a rule written down before anything was downloaded. The topics, the limit and the list are kept with the trial's notes and are not given here, so that no repository is pointed at. Version 0.1.7 said RED on 18 of them and printed 360 RED lines for 1,011 findings. On 2026-10-10 every distinct value was read and sorted by written rules (the 873 e-mail and phone findings are 259 distinct values, each read once with up to three of its places), by one reader (an AI agent) with no second reader, from the text only: nobody tested whether an address, a number or a key is live, and the working trees were scanned, not the commit history.
+The gate was run on 20 public skill repositories chosen by a rule written down before anything was downloaded. The selection details and list are kept with the trial's notes and are not given here, so that no repository is pointed at. Version 0.1.7 said RED on 18 of them and printed 360 RED lines for 1,011 findings. On 2026-10-10 every distinct value was read and sorted by written rules (the 873 e-mail and phone findings are 259 distinct values, each read once with up to three of its places), by one reader (an AI agent) with no second reader, from the text only: nobody tested whether an address, a number or a key is live, and the working trees were scanned, not the commit history.
 
 What made the 18 RED:
 
@@ -38,74 +38,143 @@ Of the 27 real home paths, 23 were in Markdown, 2 in a Python test, 1 in JSON an
 
 So expect RED the first time you run this on a healthy repository. Read each line: here 32 of the 1,011 findings named somebody who had not chosen to be named and 8 more might; the rest, as read, exposed nobody. Then settle those, one line each.
 
+With 0.1.8, all 10 repositories that were RED on false alarms alone turned GREEN after 295 settling decisions (median 8 for a repository; one needed 215), every finding labelled real or undecidable stayed RED, and all 5,876 findings of 0.1.7 are still reported. Decisions were counted; nobody timed a person. The independent checks were run by AI agents that did not write the change.
+
 ## Settle a false alarm in one line
 
-An allow entry settles a finding you have read: `RULE::WHERE::WHAT`. RULE is the id in the finding's brackets. WHERE is a pattern for the file's path (`*` also crosses folders). WHAT is a regular expression that must cover what the gate matched: write it for the whole value, with a dot as `\.` and a bracket as `\(`.
+In 0.1.8, every RED finding hands you a `settle:` entry. Copy that complete line; escape nothing and type no
+private value. It covers that rule and exact value in that file, including repeats on another line. Another
+value or another file stays RED. Keys and e-mail addresses stay masked. A home path prints the whole account
+folder, so an approval of `alice` cannot cover `alicewong`.
 
-In a clone of this repository (the first line under [Try it](#try-it)), this builds a folder with three false alarms of the commonest kinds in the trial: a made-up customer address on a stock domain, the project's own contact address, and a made-up token in a test.
+From the skill folder (the one containing `scripts/`), start with a fresh `shop` folder. These are invented
+fixtures, assembled from pieces in the shell so this README contains no complete token or e-mail address.
+The empty demo config makes this example independent of personal config; use your own config for a real
+publication scan.
 
-```bash
+```sh
+printf '{}\n' > demo-config.json
+mkdir -p shop
+printf 'SLACK_TOKEN = "%s%s"  # invented fixture\n' 'xoxb-' 'fake-bot-token' > shop/notify.py
 at=@
-mkdir -p shop/docs shop/tests
-echo 'curl -d email=customer42'$at'acme.com https://shop.invalid/orders' > shop/docs/api.md
-echo '{"name": "shop", "author": "Contoso Shop <maintainers'$at'contoso.com>"}' > shop/package.json
-echo 'SLACK_TOKEN = "xoxb-''fake-bot-token"  # made up for this test' > shop/tests/test_notify.py
-python3 scripts/publish_gate.py shop | sed 's/   | .*//'
+printf 'project mailbox: maintainers%scontoso.com\n' "$at" > shop/profile.md
+python3 scripts/publish_gate.py shop --config demo-config.json --json first.json
 ```
 
 ```text
-publish_gate selftest · 2026-10-10 19:20:30 · 239/239 passed
-config: none (built-in rules only — your own identifiers are NOT being checked)
-scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
-RED (3):
-  [R10 non-example e-mail] package.json:1  m***@contoso.com
-  [R10 non-example e-mail] docs/api.md:1  c***@acme.com
-  [R07 secret shape] tests/test_notify.py:1  xoxb-f…(19 chars)
+publish_gate 0.1.8 selftest · 2026-10-10 23:29:18 · 305/305 passed
+config: demo-config.json
+scanned shop: 2 files · 2 text · 0 binary · 0 archive member names · 0 PDF streams
+RED (2):
+  [R07 secret shape] notify.py:1  xoxb-f…(19 chars)   | SLACK_TOKEN = "xoxb-f…(19 chars)"  # invented fixture
+    Real if this is a credential or private key; remove or rotate it rather than approve it.
+    settle: SHA256 R07 948dcf658d5dfcf8fa520f4846ca97c82d76926ff0e8720836596a3bd7a2c1d8 1fc6256477ce11859e5b2c71847fd138c3ddad821cef493949711c56935e0995
+  [R10 non-example e-mail] profile.md:1  m***@contoso.com   | project mailbox: m***@contoso.com
+    Real if this address identifies a mailbox that should stay private.
+    settle: SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 068252202ad22260035cdb4d7c51b120503b18bbaf76fea0f2b75fc479171b0c
 ALLOWED (0):
 NOTE (0):
 UNSCANNED (0): none
 verdict: 🔴 RED — do not publish
 ```
 
-One line for each, then the same scan again:
+The first scan exits 1. At a terminal, run `python3 scripts/publish_gate.py shop --config demo-config.json --settle`:
+it shows each finding once, asks yes/no, and asks for a reason for each yes. A no stays RED. Never approve an actual
+credential. For an agent, first show the person the findings and ask which named findings they approve. Then name
+only those findings, one by one with repeated `--approve` flags. Here the person approved exactly these two
+invented fixtures:
 
-```bash
-cat > shop.allow <<'END'
-# the made-up customer address in the API notes
-R10::docs/api.md::customer42@acme\.com
-# the project's own contact address, in its manifest
-R10::package.json::maintainers@contoso\.com
-# the made-up token in the notifier test ([-] keeps this line from being key-shaped itself)
-R07::tests/test_notify.py::xoxb[-]fake-bot-token
-END
-python3 scripts/publish_gate.py shop --allow-file shop.allow | sed 's/   | .*   allowed by /   allowed by /'
+```sh
+python3 scripts/publish_gate.py shop --config demo-config.json \
+  --approve 'SHA256 R07 948dcf658d5dfcf8fa520f4846ca97c82d76926ff0e8720836596a3bd7a2c1d8 1fc6256477ce11859e5b2c71847fd138c3ddad821cef493949711c56935e0995' \
+  --approve 'SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 068252202ad22260035cdb4d7c51b120503b18bbaf76fea0f2b75fc479171b0c' \
+  --reason 'invented documentation fixtures' --json second.json
 ```
 
 ```text
-publish_gate selftest · 2026-10-10 19:20:30 · 239/239 passed
-config: none (built-in rules only — your own identifiers are NOT being checked)
-scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
+publish_gate 0.1.8 selftest · 2026-10-10 23:29:18 · 305/305 passed
+config: demo-config.json
+scanned shop: 2 files · 2 text · 0 binary · 0 archive member names · 0 PDF streams
+RED (2):
+  [R07 secret shape] notify.py:1  xoxb-f…(19 chars)   | SLACK_TOKEN = "xoxb-f…(19 chars)"  # invented fixture
+    Real if this is a credential or private key; remove or rotate it rather than approve it.
+    settle: SHA256 R07 948dcf658d5dfcf8fa520f4846ca97c82d76926ff0e8720836596a3bd7a2c1d8 1fc6256477ce11859e5b2c71847fd138c3ddad821cef493949711c56935e0995
+  [R10 non-example e-mail] profile.md:1  m***@contoso.com   | project mailbox: m***@contoso.com
+    Real if this address identifies a mailbox that should stay private.
+    settle: SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 068252202ad22260035cdb4d7c51b120503b18bbaf76fea0f2b75fc479171b0c
+ALLOWED (0):
+NOTE (0):
+UNSCANNED (0): none
+verdict: 🔴 RED — do not publish
+settling: appended 2 entries to shop/.publish-gate-allow
 RED (0):
-ALLOWED (3):
-  [R10 non-example e-mail] package.json:1  m***@contoso.com   allowed by R10::package.json::maintainers@contoso\.com
-  [R10 non-example e-mail] docs/api.md:1  c***@acme.com   allowed by R10::docs/api.md::customer42@acme\.com
-  [R07 secret shape] tests/test_notify.py:1  xoxb-f…(19 chars)   allowed by R07::tests/test_notify.py::xoxb[-]fake-bot-token
+ALLOWED (2):
+  [R07 secret shape] notify.py:1  xoxb-f…(19 chars)   | SLACK_TOKEN = "xoxb-f…(19 chars)"  # invented fixture   allowed by SHA256 R07 948dcf658d5dfcf8fa520f4846ca97c82d76926ff0e8720836596a3bd7a2c1d8 1fc6256477ce11859e5b2c71847fd138c3ddad821cef493949711c56935e0995
+  [R10 non-example e-mail] profile.md:1  m***@contoso.com   | project mailbox: m***@contoso.com   allowed by SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 068252202ad22260035cdb4d7c51b120503b18bbaf76fea0f2b75fc479171b0c
 NOTE (0):
 UNSCANNED (0): none
 verdict: 🟢 GREEN — NOTE items still need a human look
 ```
 
-Both outputs are copied from a terminal (0.1.7, 2026-10-10). Without the `sed`, the first run exits 1 and the second 0. The `sed` drops the quoted source line from each finding and `$at` stands for the @ sign, only because this README has to pass the same gate and would otherwise hold both addresses in full; on your own folder leave the `sed` off. The same entries work as `--allow 'ENTRY'` flags. An allowed finding is not hidden: it is printed under ALLOWED with the entry that let it through.
+The settling pass exits 0 and appends two dated decisions with the given reason to `shop/.publish-gate-allow`.
+It preserves existing entries and comments. Each entry carries the rule, a full SHA-256 of the exact file/location
+and a full SHA-256 of the matched value, so even a key-shaped filename cannot put the key into the allow file.
+The allow file is read automatically on the next run:
 
-**Do not copy an entry from a printed home path.** For a home path the gate prints only the start that its rule matched: the users folder on macOS, the home folder and one letter on Linux. An entry with that as its pattern allows every home path that starts the same way in the files it covers, a real account's too. Write the pattern through the user folder and the slash that closes it, and name the one file: `R04::docs/howto.md::[/]home/alice/` (the first slash is written `[/]` so that this line is not a home path itself). Without the closing slash the entry also allows a longer name that starts with `alice`.
+```sh
+python3 scripts/publish_gate.py shop --config demo-config.json
+```
 
-What else is awkward about this in 0.1.7:
+```text
+publish_gate 0.1.8 selftest · 2026-10-10 23:29:19 · 305/305 passed
+config: demo-config.json
+allow file: shop/.publish-gate-allow · 2 entries read
+scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
+RED (0):
+ALLOWED (2):
+  [R07 secret shape] notify.py:1  xoxb-f…(19 chars)   | SLACK_TOKEN = "xoxb-f…(19 chars)"  # invented fixture   allowed by SHA256 R07 948dcf658d5dfcf8fa520f4846ca97c82d76926ff0e8720836596a3bd7a2c1d8 1fc6256477ce11859e5b2c71847fd138c3ddad821cef493949711c56935e0995
+  [R10 non-example e-mail] profile.md:1  m***@contoso.com   | project mailbox: m***@contoso.com   allowed by SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 068252202ad22260035cdb4d7c51b120503b18bbaf76fea0f2b75fc479171b0c
+NOTE (0):
+UNSCANNED (0): none
+verdict: 🟢 GREEN — NOTE items still need a human look
+```
 
-- A comment needs its own line and starts in the first column. Text after an entry on the same line becomes part of its pattern: the entry then matches nothing, and no warning is printed. A bracket left unescaped does the same.
-- An allow file inside the folder is scanned like any other file. An address written there without the backslash, or a token written out in full, is a new RED line, which is why the token above has `[-]` in it. Or keep the file outside the folder.
-- A key-shaped value is printed cut short (`xoxb-f…(19 chars)`), so open the file to see what the pattern has to cover.
-- There is no default allow file: `--allow-file` goes on every run. A path that does not exist ends in a Python traceback with exit code 1, the code a RED verdict also uses.
-- An entry is as wide as you write it. `R10::*::[A-Za-z0-9._%+-]+@acme\.com` settles every address at that stock domain in any file, a real mailbox there too; `R07::tests/*::.+` allows every key-shaped string under `tests/`, a real one too, and in the trial 2 of the 27 real home paths were in test code. An entry with no rule id (`WHERE::WHAT`) is read as well and applies to every rule. The three entries above each cover one value in one file.
+That scan exits 0. Add another value to the same file, then scan again:
+
+```sh
+at=@
+printf 'new mailbox: reviewers%scontoso.com\n' "$at" >> shop/profile.md
+python3 scripts/publish_gate.py shop --config demo-config.json --json third.json
+```
+
+```text
+publish_gate 0.1.8 selftest · 2026-10-10 23:29:19 · 305/305 passed
+config: demo-config.json
+allow file: shop/.publish-gate-allow · 2 entries read
+scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
+RED (1):
+  [R10 non-example e-mail] profile.md:2  r***@contoso.com   | new mailbox: r***@contoso.com
+    Real if this address identifies a mailbox that should stay private.
+    settle: SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 69c514ad8a2d8f385ac4fc281210b60535338f0312d0579250f65afcef82bf3d
+ALLOWED (2):
+  [R07 secret shape] notify.py:1  xoxb-f…(19 chars)   | SLACK_TOKEN = "xoxb-f…(19 chars)"  # invented fixture   allowed by SHA256 R07 948dcf658d5dfcf8fa520f4846ca97c82d76926ff0e8720836596a3bd7a2c1d8 1fc6256477ce11859e5b2c71847fd138c3ddad821cef493949711c56935e0995
+  [R10 non-example e-mail] profile.md:1  m***@contoso.com   | project mailbox: m***@contoso.com   allowed by SHA256 R10 74082678e68059ddf4d2396c0e9f3820f1a29d3a93ed329aa02e6a0a50349c2f 068252202ad22260035cdb4d7c51b120503b18bbaf76fea0f2b75fc479171b0c
+NOTE (0):
+UNSCANNED (0): none
+verdict: 🔴 RED — do not publish
+```
+
+Only the added value is RED; the exit code is 1. Timestamps vary on your run.
+
+Use `--ignore-default-allow` to ignore the default file's decisions. `--allow-file F` reads an additional file and
+chooses it as the append destination. An entry can also be copied to a file or passed with `--allow 'ENTRY'`.
+Unused entries are named. Whole-line comments may be indented; inline comments are refused explicitly.
+
+Existing regex entries still match as before, including prefixes and `contact.md::.*`; they can cover many values
+and are marked WIDE. New digest entries have exact file scope. Use `--scope-all-files` only if the person explicitly
+approves that same rule/value in every file; it produces a visible WIDE entry and cannot approve other values.
+There is no approve-everything switch. ALLOWED remains in the report, and comments in the allow file are scanned:
+pasting a key into a reason still makes the gate RED. See the config guide for details.
 
 Quieter rules were tried and dropped. On 2026-10-10 three builds were measured on the same 20: they turned 6, 8 and 5 of them green (0.1.7: 2), printed 117, 110 and 187 RED lines, and kept every finding that names somebody. But against new values written to test them, each let through some that must stay RED: the first 6 of 7, the second 11 of 55, the third 9 of 48 new ones and none of the earlier 55. The first two let through a complete private key written as quoted lines; the third did not. So the rules stay strict, and a false alarm is settled by hand.
 
@@ -125,7 +194,7 @@ python3 scripts/publish_gate.py demo
 The self-test prints:
 
 ```text
-publish_gate selftest · 2026-10-09 00:22:49 · 239/239 passed
+publish_gate 0.1.8 selftest · 2026-10-10 23:29:25 · 305/305 passed
 ```
 
 The last command prints what the picture at the top of this page shows; its last line is the one below, and its exit code is 1 (non-zero on purpose: it found something).
@@ -141,12 +210,12 @@ verdict: 🔴 RED — do not publish
 - `--git-range` scans every commit's author, message and blobs — a line deleted last week is still in the history you publish.
 - Your own identifiers live in a config outside every repo; built-in rules work without it.
 - For secrets it is a backstop, not a scanner: fourteen key formats and `api_key = <long value>`-style assignments. Run gitleaks or trufflehog as well; what this gate adds is everything on this list that is not a credential.
-- A finding you have read and accept is settled with one allow entry (`--allow`, or a line in an `--allow-file`). The entry names the rule and the file and must cover the matched text itself (`R10::package.json::maintainers@contoso\.com`); the finding is still printed, under ALLOWED.
+- Every RED finding supplies an exact, file-scoped SHA-256 allow entry. A terminal `--settle` pass asks yes/no and a reason; agents repeat `--approve 'ENTRY'` only for findings the person named, with `--reason 'why'`. Decisions append to `.publish-gate-allow` at the scanned root, which is read automatically next time. Keys and e-mail addresses stay masked. Legacy regex forms still match as before; wide and unused entries are named. See [the config guide](references/config-guide.md) for commands and scope.
 - Self-test with one sample per rule and per key format, and a clean control.
 - A home path is a NOTE, not RED, when its whole user folder name is a stand-in word (`user`, `you`, `dev`, `node` and four more), three dots or a name in angle brackets. Any other folder name is RED, invented ones such as `jane` included. A real account named exactly like a stand-in is a NOTE too: put your own login in the config.
 - Also NOTEs: a package name with an `@` and a version number (each one is in `--json`, one printed line per file), an e-mail address whose two sides are both stand-ins from two short lists, and a phone number written with `+1` and area code 555, which NANPA lists as not assignable. An `@` followed by four numbers stays RED. A Windows path with forward slashes is one finding, not two.
-- The same address, the same phone digits or the same user folder is printed as one RED line with its count; `--json` lists every place.
-- On 20 public skill repositories (2026-10-08) this took the RED lines printed from 5,560 to 360, and for the median repository from 23 to 7.5. Every 0.1.6 finding is still in `--json`, as RED or as a NOTE. The 28 home-path findings with a real account name and the 66 key-shaped strings picked out by hand in the first run are all still RED (the 28 print as 27, because a Windows path that two rules both reported is now counted once); e-mail addresses and phone numbers were not part of that hand-picked set. What the 360 lines turned out to be, read one by one, is under "What RED meant on 20 real repositories".
+- Identical matched values in the same file print as one RED decision; another file needs another approval. `--json` lists every place. Home paths print the whole account folder; approving `alice` never approves `alicewong`. Uppercase Linux account initials, missed before 0.1.8, now follow the same path rule.
+- In the 0.1.6-to-0.1.7 comparison on 20 public skill repositories this took the RED lines printed from 5,560 to 360, and for the median repository from 23 to 7.5. Every 0.1.6 finding is still in `--json`, as RED or as a NOTE. The 28 home-path findings with a real account name and the 66 key-shaped strings picked out by hand in the first run are all still RED (the 28 print as 27, because a Windows path that two rules both reported is now counted once); e-mail addresses and phone numbers were not part of that hand-picked set. What the 360 lines turned out to be, read one by one, is under "What RED meant on 20 real repositories".
 - Phone checks include leading-zero national forms, phone-word bare 10/11-digit runs, and Chinese national mobiles (11 digits starting 13–19, including matching IDs). Bare ten-digit runs without a phone word stay clean. North American numbers followed by a full stop are caught; documented North American, UK and Australian fiction shapes are exempt, including a test number followed by a column delimiter and a valid ISO date/time. Extra fields and split real numbers stay RED.
 
 The full procedure, the boundaries and where the rules came from are in [SKILL.md](SKILL.md).
@@ -253,10 +322,10 @@ In this skill's Codex run, every call into the skill folder's scripts/ used that
 python3 scripts/publish_gate.py --selftest
 ```
 
-Standard library only, Python 3.9+. On 2026-10-09 every self-test above passed, and
+Standard library only, Python 3.9+. On 2026-10-10 every self-test above passed, and
 `breakcheck.py` from [nk-breakable-selftest](https://github.com/NickkkLian/nk-breakable-selftest) broke each script on purpose in a sandbox copy:
 
-- `publish_gate.py`: 29 lines broken one at a time; 24 turned the self-test red without a traceback. Not covered: the self-test stayed green with L458, L543, L564 switched off; switching off L453, L606 crashed the script instead of failing a sample, which does not count as caught.
+- `publish_gate.py`: 43 lines broken one at a time; 26 turned the self-test red without a traceback. Not covered: the self-test stayed green with L601, L721, L755, L758, L761, L876, L1641 switched off; switching off L481, L513, L541, L595, L629, L697, L818, L819, L873, L885 crashed the script instead of failing a sample, which does not count as caught.
 
 The unmutated control stayed green every time. Only lines that record a finding, raise, or return a failing exit code
 were broken (the tool's pattern, or the hand-written list); a line number refers to the script as shipped in this version.
@@ -272,7 +341,7 @@ This shows those lines are covered. It does not show that nothing else can fail.
 
 ## Privacy
 
-This skill's script runs on your computer, started by you or by the agent you use it in. It reads the files in the folder you name (with `--git-range`, also the commits in that range) and, if you made one, your config file of your own names and addresses; it prints what it finds, including the matched text, and writes a file only when you ask for one (`--json`, `--init-config`). The script opens no network connection and keeps nothing; what it prints is read by the agent you run it in, as part of your session with that agent. Questions: open an issue on this repository.
+This skill's script runs on your computer, started by you or by the agent you use it in. It reads the files in the folder you name (with `--git-range`, also the commits in that range) and, if you made one, your config file of your own names and addresses; it prints its findings, masking keys and e-mail addresses and showing whole account folders for home paths. It writes reports or config only when asked (`--json`, `--init-config`); `--settle` or named `--approve` appends dated decisions and reasons to `.publish-gate-allow` at the scanned root, or to the chosen `--allow-file`. That default allow file is read on later runs. The script opens no network connection; what it prints is read by the agent you run it in, as part of your session with that agent. Questions: open an issue on this repository.
 
 ## License
 

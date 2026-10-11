@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.8 — 2026-10-10
+
+- Keep every existing detector, tier and location with no allow entry. The sole detection expansion is R04's
+  Linux account initial: `[a-z]` becomes `[A-Za-z]` in text and bytes. Uppercase accounts now follow the same
+  RED/stand-in NOTE policy. Home paths display the whole account folder rather than the matched prefix.
+- Supply `SHA256 RULE FILE_DIGEST VALUE_DIGEST` for every RED finding: full SHA-256 of the complete matched value,
+  with the whole account folder path for a home path. Hash the file/location too, so a key-shaped filename cannot
+  copy a key into the allow file. The space-delimited form cannot collide with either legacy syntax.
+  File identities preserve archive member sequences and full commit IDs, preventing aliases in displayed paths.
+  Filename/content and PDF streams share their source file identity; line or stream moves do not stale approvals.
+  It covers that rule/value in that exact file/location,
+  independent of line number. Mask keys and e-mail addresses in excerpts as well as matched-text fields.
+- Add a terminal `--settle` pass and repeated named `--approve ENTRY --reason TEXT` flags for agents.
+  Append dated reasons without rewriting existing bytes. No blanket approval flag and no separate state file.
+  Settlement passes enumerate all binary matches; ordinary scans retain the previous listing limits.
+- Read root `.publish-gate-allow` by default and report the file/count; `--ignore-default-allow` skips decisions.
+  Report unused entries. Accept indented comments and refuse inline comments explicitly. A missing allow input
+  reports one usage-error line with exit 2. Valid digest bodies in recognized allow files are structural; comments,
+  legacy entries and everything else are scanned, including a key pasted in a comment.
+- Preserve both legacy regex forms, their prefix behavior and R05-to-R04 fallback. Mark every legacy regex
+  entry as potentially wide; explicit `--scope-all-files` produces visible SHA256-WIDE entries for one rule/value.
+  A digest approval for R05 keeps a forward-slash Windows path a single finding.
+- Group RED decisions by rule, exact file/location and matched value; another file needs another decision.
+  JSON still lists every occurrence and adds the generated entry and decision guidance.
+- Preserve hashes in legacy filename patterns and regex character classes while refusing genuine inline comments.
+  Invalid terminal answers abort without appending earlier approvals.
+- Self-tests: 305/305, including the original 239 cases; settling regressions and retained feature-off evidence accompany
+  the handback. Historical version numbers below refer to the releases measured at the time.
+
 ## 0.1.7 — 2026-10-09
 
 After a run on 20 public skill repositories, where 19 came out RED with 5,560 lines and most of them named nobody.
