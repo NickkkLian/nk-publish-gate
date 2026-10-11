@@ -81,8 +81,11 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --approve 'ENTRY_FROM_
 For a person at a terminal, `python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --settle` walks the findings
 once: yes/no for each, and a reason for each yes. A no stays RED. EOF or an invalid selection writes nothing.
 The terminal pass and named-approval pass enumerate recognized RED binary matches under the implemented rules
-for this review. Ordinary scans stop listing after the first unapproved RED per binary rule and cap repeated
-ALLOWED/NOTE binary records at 20 per rule. JSON contains recorded occurrences, not every possible byte match.
+for this review. Ordinary scans stop listing after the first unapproved RED per binary rule. In both modes,
+every distinct ALLOWED decision and reason is retained in the report and JSON. Beyond the binary listing budget
+of 20 per rule, repeats of an already retained ALLOWED decision are counted on a retained record instead of
+creating more records; JSON's optional `occurrences` gives that count (absent means 1). NOTE retains its cap of
+20 binary records per rule. JSON contains recorded occurrences/counts, not every possible byte match.
 Successful partial settlement exits 1 if any RED remains; a pass with no RED exits 0. Invalid input exits 2.
 
 Both modes append dated decisions to `<dir>/.publish-gate-allow`; they preserve existing bytes. This default file

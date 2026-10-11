@@ -66,7 +66,7 @@ python3 scripts/publish_gate.py shop --config demo-config.json --json first.json
 ```
 
 ```text
-publish_gate 0.1.8 selftest · 2026-10-11 00:01:26 · 310/310 passed
+publish_gate 0.1.8 selftest · 2026-10-11 00:34:47 · 312/312 passed
 config: demo-config.json
 scanned shop: 2 files · 2 text · 0 binary · 0 archive member names · 0 PDF streams
 RED (2):
@@ -97,7 +97,7 @@ python3 scripts/publish_gate.py shop --config demo-config.json \
 ```
 
 ```text
-publish_gate 0.1.8 selftest · 2026-10-11 00:01:27 · 310/310 passed
+publish_gate 0.1.8 selftest · 2026-10-11 00:34:48 · 312/312 passed
 config: demo-config.json
 scanned shop: 2 files · 2 text · 0 binary · 0 archive member names · 0 PDF streams
 RED (2):
@@ -134,7 +134,7 @@ python3 scripts/publish_gate.py shop --config demo-config.json
 ```
 
 ```text
-publish_gate 0.1.8 selftest · 2026-10-11 00:01:27 · 310/310 passed
+publish_gate 0.1.8 selftest · 2026-10-11 00:34:48 · 312/312 passed
 config: demo-config.json
 allow file: shop/.publish-gate-allow · 2 entries read
 scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
@@ -158,7 +158,7 @@ python3 scripts/publish_gate.py shop --config demo-config.json --json third.json
 ```
 
 ```text
-publish_gate 0.1.8 selftest · 2026-10-11 00:01:28 · 310/310 passed
+publish_gate 0.1.8 selftest · 2026-10-11 00:34:49 · 312/312 passed
 config: demo-config.json
 allow file: shop/.publish-gate-allow · 2 entries read
 scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
@@ -216,7 +216,7 @@ python3 scripts/publish_gate.py demo
 The self-test output begins with:
 
 ```text
-publish_gate 0.1.8 selftest · 2026-10-11 00:01:48 · 310/310 passed
+publish_gate 0.1.8 selftest · 2026-10-11 00:34:52 · 312/312 passed
 ```
 
 The last command prints what the picture at the top of this page shows; its last line is the one below, and its exit code is 1 (non-zero on purpose: it found something).
@@ -236,7 +236,7 @@ verdict: 🔴 RED — do not publish
 - Self-test with one sample per rule and per key format, and a clean control.
 - A home path is a NOTE, not RED, when its whole user folder name is a stand-in word (`user`, `you`, `dev`, `node` and four more), three dots or a name in angle brackets. Other recognized accounts are RED unless approved, including invented ones such as `jane`. The Linux home-prefix pattern requires an ASCII A–Z/a–z initial; non-ASCII initials can pass without a configured rule. A real account named like a stand-in is a NOTE too: put your login in the config.
 - Also NOTEs: a package name with an `@` and a version number (each one is in `--json`, one printed line per file), an e-mail address whose two sides are both stand-ins from two short lists, and a phone number written with `+1` and area code 555, which NANPA lists as not assignable. An `@` followed by four numbers stays RED. A Windows path with forward slashes is one finding, not two.
-- Identical matched values in the same file print as one RED decision; another file needs another approval. `--json` lists recorded occurrences, subject to ordinary binary listing limits. Home paths print the whole account folder; approving `alice` never approves `alicewong`, but covers other subpaths and future occurrences of the same account in that file. Uppercase ASCII Linux account initials now follow the same path rule.
+- Identical matched values in the same file print as one RED decision; another file needs another approval. Every distinct approved binary decision and reason is retained in the report and JSON. Beyond the listing budget of 20 per rule, already retained ALLOWED repeats are counted instead of adding records; JSON's optional `occurrences` field is that count (absent means 1). NOTE keeps its 20-record binary cap; ordinary scans still stop listing after the first unapproved RED per binary rule. Home paths print the whole account folder; approving `alice` never approves `alicewong`, but covers other subpaths and future occurrences of the same account in that file. Uppercase ASCII Linux account initials now follow the same path rule.
 - In the 0.1.6-to-0.1.7 comparison on 20 public skill repositories the RED lines printed fell from 5,560 to 360, and for the median repository from 23 to 7.5. Every 0.1.6 finding is still in `--json`, as RED or as a NOTE. The 28 home-path findings labelled as carrying a real account name and the 66 key-shaped occurrences selected by the reader in the first run are all still RED (the 28 print as 27, because a Windows path that two rules both reported is now counted once); e-mail addresses and phone numbers were not part of that hand-picked set. What the 360 lines turned out to be, read one by one, is under "What RED meant on 20 real repositories".
 - Phone checks include leading-zero national forms, phone-word bare 10/11-digit runs, and Chinese national mobiles (11 digits starting 13–19, including matching IDs). Bare ten-digit runs without a phone word stay clean. North American numbers followed by a full stop are caught; documented North American, UK and Australian fiction shapes are exempt, including a test number followed by a column delimiter and a valid ISO date/time. Extra fields and split real numbers stay RED.
 
@@ -286,8 +286,12 @@ UTF-8 replacement decoding; binaries use byte patterns, and PDF extraction tries
 blocks, not every encoding or visual glyph. Reported file/member read failures and archive depth/size limits
 enter UNSCANNED, but malformed ZIPs can fall back to ordinary text/bytes and failed PDF stream decodes can be
 skipped without that flag. Image-file NOTEs request manual inspection; embedded images are not individually listed.
-File thresholds are 50 MiB for NOTE and 100 MiB for RED unless approved. JSON lists recorded occurrences;
-ordinary binary scans stop at the first unapproved RED per rule and cap repeated ALLOWED/NOTE records at 20.
+File thresholds are 50 MiB for NOTE and 100 MiB for RED unless approved. JSON lists recorded occurrences/counts.
+Every distinct approved binary decision and its reason is retained in the report and JSON, in both ordinary
+and settling scans. Beyond the listing budget of 20 per rule, repeats of an already retained ALLOWED decision
+are counted on a retained record instead of adding more records; JSON's optional `occurrences` gives that
+count (absent means 1), and the report totals those counts. NOTE keeps its cap of 20 binary records per rule;
+ordinary scans still stop listing after the first unapproved RED per binary rule.
 
 Non-entry content of every loaded allow file is scanned, wherever it sits, and rescanned after an append. Each
 file-specific ALLOWED decision shows its stored reason, with keys/e-mails masked; missing reasons say "not recorded".
@@ -380,7 +384,7 @@ python3 scripts/publish_gate.py --selftest
 Python 3.9+ and Git on PATH; Python imports are standard-library only. On 2026-10-11 every self-test above passed, and
 `breakcheck.py` from [nk-breakable-selftest](https://github.com/NickkkLian/nk-breakable-selftest) broke each script on purpose in a sandbox copy:
 
-- `publish_gate.py`: 43 lines broken one at a time; 27 turned the self-test red without a traceback. Not covered: the self-test stayed green with L622, L752, L786, L789, L792, L921, L1734 switched off; switching off L502, L534, L562, L616, L650, L714, L861, L918, L930 crashed the script instead of failing a sample, which does not count as caught.
+- `publish_gate.py`: 43 lines broken one at a time; 27 turned the self-test red without a traceback. Not covered: the self-test stayed green with L638, L768, L802, L805, L808, L937, L1777 switched off; switching off L506, L538, L566, L627, L666, L730, L877, L934, L946 crashed the script instead of failing a sample, which does not count as caught.
 
 The unmutated control stayed green every time. Only lines that record a finding, raise, or return a failing exit code
 were broken (the tool's pattern, or the hand-written list); a line number refers to the script as shipped in this version.

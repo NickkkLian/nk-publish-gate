@@ -42,7 +42,9 @@ Config rules (your own identifiers, from --config or $PUBLISH_GATE_CONFIG or ~/.
 NOTE (listed, never red): R04/R05 home paths with a stand-in user · R09 +1 numbers in area code 555 · R10 name@version counts and stand-in addresses · R13 AI tool names inside archives/binaries · R14 non-Latin scripts (only with --note-scripts) · R15 file >= 50 MB · R16 images (a machine cannot read a screenshot: look at them)
 Repeats (0.1.8): identical matched values under the same rule in the same file/location are one RED decision with
 their count and first place; another file needs another decision. ALLOWED groups only within the same file and
-matching approval and shows its reason; NOTE keeps earlier grouping. --json lists recorded occurrences,
+matching approval and shows its reason, including every distinct binary decision. Beyond the listing budget,
+ALLOWED repeats are counted on retained records (optional occurrences, absent means 1); NOTE keeps its cap.
+--json lists recorded occurrences/counts,
 subject to ordinary binary listing limits, and supplies settle_entry / real_if / masked allow_reason.
 Archives (PK header: zip/xlsx/docx/pptx/jar) are opened up to 3 levels, member names included; PDF Flate streams are inflated and
 scanned as text; binaries use byte patterns; directory files are read regardless of extension, excluding .git.
@@ -215,7 +217,7 @@ def printed(rows):
 
 
 def public(rows):
-    """JSON records retain every occurrence and omit private grouping fields."""
+    """JSON retains reported occurrences and counted binary repeats, omitting private grouping fields."""
     return [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
 
 
@@ -313,10 +315,11 @@ def settle_groups(rows, approvals=False):
     out, at = [], {}
     for row in rows:
         key = (row["settle_entry"], row["allowed_by"]) if approvals else row["settle_entry"]
+        count = row.get("occurrences", 1)
         if key in at:
-            at[key][1] += 1
+            at[key][1] += count
         else:
-            out.append([row, 1, {row["where"]}]); at[key] = out[-1]
+            out.append([row, count, {row["where"]}]); at[key] = out[-1]
     return out
 
 
@@ -447,7 +450,8 @@ class Result:
                 return entry_text(entry)
         return None
 
-    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None, value=None, identity=None):
+    def hit(self, rule, label, where, line_no, line_text, matched, tier="RED", span=None, allow_text=None, value=None, identity=None,
+            approved_by=None):
         """Record a hit. `span` is where the match sits in `allow_text` (default: `line_text`); callers that know it pass
         it, so a second occurrence of the same text is judged on its own. Returns the list it went to."""
         shown = matched[:6] + "…" + f"({len(matched)} chars)" if rule in MASK_RULES else safe_excerpt(matched)
@@ -475,7 +479,7 @@ class Result:
         if self.scope is not None and self.scope != where:
             rec["source"] = scope_label(self.scope)
         rec["real_if"] = REAL_IF.get(rule, "Real if this is one of the configured personal identifiers that should stay private.")
-        by = self.allowed_by(rule, where, text, span, identity=identity, track=True)
+        by = approved_by or self.allowed_by(rule, where, text, span, identity=identity, track=True)
         if by:
             rec["allowed_by"] = by
             reason = getattr(self.allow, "reasons", {}).get(by)
@@ -570,7 +574,7 @@ def scan_text(rules, res, where, text, inside):
 
 
 BIN_WINDOW = 200        # bytes on either side of a binary hit that an allow REGEX is matched in
-BIN_LISTED = 20         # allowed occurrences listed per rule and file; the rest are still checked, just not listed
+BIN_LISTED = 20         # initial allowed records per rule/file; later repeats counted, new decisions always retained
 
 
 def binary_home_after(data, offset, rid):
@@ -586,8 +590,9 @@ def binary_home_after(data, offset, rid):
 
 def scan_bytes(rules, res, where, data):
     """Every occurrence of a rule in a binary is judged on its own. The first one that is not allowed makes the file
-    RED for that rule (later ones would not change that, so they are not listed); allowed ones, and home paths with a
-    stand-in user (NOTE), are listed up to BIN_LISTED and after that only checked. The window is decoded as UTF-8 with undecodable bytes kept as escapes,
+    RED for that rule (later ones would not change that, so they are not listed). Beyond BIN_LISTED, repeated ALLOWED
+    occurrences are counted on a retained record; a new decision always gets a record. Stand-in NOTE records keep
+    their per-rule cap. The window is decoded as UTF-8 with undecodable bytes kept as escapes,
     so an allow REGEX written in any script matches the same text it would match in a text file."""
     def window_of(m):
         lo = max(0, m.start() - BIN_WINDOW)
@@ -596,6 +601,7 @@ def scan_bytes(rules, res, where, data):
     drive = [m.span() for m in rules.r05_b.finditer(data) if not res.allowed_by("R05", where, *window_of(m), legacy_only=True)]
     for rid, label, rx in rules.bytes:
         listed = noted = 0
+        decisions = {}
         for m in rx.finditer(data):
             if not m.group(0) or (rid == "R04" and _inside(m.span(), drive)):
                 continue
@@ -609,11 +615,21 @@ def scan_bytes(rules, res, where, data):
             window, span = window_of(m)
             raw = m.group(0).decode("utf-8", "surrogateescape")
             whole = home_value(rid, raw, binary_home_after(data, m.end(), rid)) if rid in {"R04", "R05"} else raw
-            if listed >= BIN_LISTED and res.allowed_by(rid, where, window, span, identity=whole, track=True):
-                continue
+            by = None
+            if listed >= BIN_LISTED:
+                by = res.allowed_by(rid, where, window, span, identity=whole, track=True)
+                prior = decisions.get((by, whole)) if by else None
+                if prior is not None:
+                    prior["occurrences"] = prior.get("occurrences", 1) + 1
+                    continue
             s = whole if rid in {"R04", "R05"} else m.group(0)[:200].decode("utf-8", "replace")
             user = _home_user(rid, m.group(0).decode("latin-1"), after) or None
-            if res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window, value=user, identity=whole) == "red":
+            tier = res.hit(rid, label + " (binary)", where, 0, s, s, span=span, allow_text=window, value=user, identity=whole,
+                           approved_by=by)
+            if tier == "allowed":
+                row = res.allowed[-1]
+                decisions[(row["allowed_by"], whole)] = row
+            elif tier == "red":
                 if not res.review_all_binary:
                     break
             listed += 1
@@ -1068,6 +1084,33 @@ def settling_selftest(check):
               f"0.1.8 path glob characters are literal for {label}")
     key = "sk-" + "A7b9" * 6
     key2 = "sk-" + "A7b9" * 5 + "C8d0"
+    binary_values = ["sk-" + "A7b9" * 5 + f"{number:04x}" for number in range(BIN_LISTED + 1)]
+    binary_data = b"\x00" + b"\x00".join(value.encode() for value in binary_values) + b"\x00"
+    binary_findings = hits(binary_data, binary=True)
+    binary_entries = parse_allow([row["settle_entry"] for row in binary_findings.red], None)
+    for number, row in enumerate(binary_findings.red):
+        binary_entries.reasons[row["settle_entry"]] = f"public binary fixture {number}"
+    binary_decisions_ok = len(binary_findings.red) == BIN_LISTED + 1
+    for review in (False, True):
+        binary_result = Result(binary_entries)
+        binary_result.review_all_binary = review
+        scan_bytes(rules, binary_result, "sample.md", binary_data)
+        report = captured(lambda: print_report(binary_result))
+        records = public(binary_result.allowed)
+        binary_decisions_ok = binary_decisions_ok and not binary_result.red and len(records) == BIN_LISTED + 1
+        binary_decisions_ok = binary_decisions_ok and all(
+            row["settle_entry"] in report and f"reason: public binary fixture {number}" in report
+            and any(record["settle_entry"] == row["settle_entry"]
+                    and record.get("allow_reason") == f"public binary fixture {number}" for record in records)
+            for number, row in enumerate(binary_findings.red))
+    check(binary_decisions_ok,
+          "0.1.8 binary report and JSON retain every distinct approved decision beyond the cap, with its reason")
+    repeated_data = binary_data + (binary_values[0].encode() + b"\x00") * (BIN_LISTED + 5)
+    repeated_result = hits(repeated_data, allow=binary_entries, binary=True)
+    check(not repeated_result.red and len(repeated_result.allowed) <= BIN_LISTED + 1
+          and sum(row.get("occurrences", 1) for row in public(repeated_result.allowed)) == 2 * BIN_LISTED + 6
+          and sum(count for _, count, _ in settle_groups(repeated_result.allowed, approvals=True)) == 2 * BIN_LISTED + 6,
+          "0.1.8 capped binary repeats carry their occurrence count without hiding another decision")
     r = hits(key + " " + key2)
     e = r.red[0]["settle_entry"]
     a = parse_allow([e], None)

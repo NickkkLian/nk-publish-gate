@@ -62,7 +62,10 @@ would be real; answer yes/no and give a reason for each yes. A no remains RED. A
 comment/entry pairs, preserving every previous byte; EOF or an invalid answer appends nothing. A successful
 partial settlement still exits 1 when RED remains; no RED means exit 0; usage/self-test errors exit 2.
 Settlement scans enumerate recognized RED binary matches under these rules for this review; ordinary scans
-preserve their earlier first-RED-per-rule behavior and repeated ALLOWED/NOTE binary record caps.
+preserve their earlier first-RED-per-rule behavior. In both modes, every distinct ALLOWED binary decision is
+retained with its reason in the report and JSON. Beyond the listing budget of 20 per rule, repeated occurrences
+of an already retained decision increment a record's optional `occurrences` count instead of adding records
+(absent means 1); the printed decision totals those counts. NOTE retains its 20-record binary cap.
 
 The default file is `folder/.publish-gate-allow`, read automatically at the root with its entry count printed.
 `--ignore-default-allow` ignores its decisions. `--allow-file F` also reads F and uses it as the append destination;

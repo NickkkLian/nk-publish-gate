@@ -14,7 +14,7 @@
   independent of line number. Mask keys and e-mail addresses in excerpts as well as matched-text fields.
 - Add a terminal `--settle` pass and repeated named `--approve ENTRY --reason TEXT` flags for agents.
   Append dated reasons without rewriting existing bytes. No blanket approval flag and no separate state file.
-  Settlement passes enumerate all binary matches; ordinary scans retain the previous listing limits.
+  Settlement passes enumerate recognized RED binary matches; ordinary scans retain the first-RED-per-rule limit.
 - Read root `.publish-gate-allow` by default and report the file/count; `--ignore-default-allow` skips decisions.
   Report unused entries. Accept indented comments and refuse inline comments explicitly. A missing allow input
   reports one usage-error line with exit 2. Valid digest bodies in recognized allow files are structural; comments,
@@ -23,13 +23,16 @@
   entry as potentially wide; explicit `--scope-all-files` produces visible SHA256-WIDE entries for one rule/value.
   A digest approval for R05 keeps a forward-slash Windows path a single finding.
 - Group RED decisions by rule, exact file/location and matched value; another file needs another decision.
-  JSON still lists every occurrence and adds the generated entry and decision guidance.
+  JSON lists recorded occurrences/counts and adds the generated entry and decision guidance.
 - Scan non-entry content of every loaded allow file, including external files and post-append reasons.
   Retain dated reasons as metadata without changing matching; mask key/e-mail reasons in text and JSON.
   Display every file-specific ALLOWED decision with its reason, or "not recorded" when absent.
+- Retain every distinct approved binary decision and its reason in ordinary and settlement scans.
+  Beyond the 20-record listing budget per rule, count repeats on retained ALLOWED records; optional JSON
+  `occurrences` defaults to one, and report totals include it. NOTE keeps its 20-record binary cap.
 - Clarify copy-after-label instructions, partial-settlement exit codes, directory/history scope,
   detector limits and prerequisites. Construct self-test fixtures from pieces at runtime.
-- Self-tests: 310/310, including the original 239 cases; settling regressions and retained feature-off evidence accompany
+- Self-tests: 312/312, including the original 239 cases; settling regressions and retained feature-off evidence accompany
   the handback. Historical version numbers below refer to the releases measured at the time.
 
 ## 0.1.7 — 2026-10-09
