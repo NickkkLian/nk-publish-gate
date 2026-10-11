@@ -61,11 +61,15 @@ flag. At a terminal, `--settle` shows each rule, file/line, masked finding, cont
 would be real; answer yes/no and give a reason for each yes. A no remains RED. A completed pass appends dated
 comment/entry pairs, preserving every previous byte; EOF or an invalid answer appends nothing. A successful
 partial settlement still exits 1 when RED remains; no RED means exit 0; usage/self-test errors exit 2.
-Settlement scans enumerate recognized RED binary matches under these rules for this review; ordinary scans
-preserve their earlier first-RED-per-rule behavior. In both modes, every distinct ALLOWED binary decision is
-retained with its reason in the report and JSON. Beyond the listing budget of 20 per rule, repeated occurrences
-of an already retained decision increment a record's optional `occurrences` count instead of adding records
-(absent means 1); the printed decision totals those counts. NOTE retains its 20-record binary cap.
+Settlement scans enumerate recognized RED binary matches under these rules for this review.
+
+A settling pass lists every distinct approved binary decision and its reason in the report and JSON, even if RED remains.
+An ordinary run stops that rule's scan of that file at its first unapproved RED, which stays visible, so it lists only
+approved decisions reached before that RED; if the file has no RED for that rule, it lists them all.
+
+Beyond the binary listing budget of 20 per rule, repeats reached by the scan count on retained ALLOWED records;
+JSON's optional `occurrences` gives that count (absent means 1), and each printed decision totals it.
+NOTE keeps its 20-record binary cap.
 
 The default file is `folder/.publish-gate-allow`, read automatically at the root with its entry count printed.
 `--ignore-default-allow` ignores its decisions. `--allow-file F` also reads F and uses it as the append destination;
@@ -85,7 +89,7 @@ named approval into `SHA256-WIDE RULE * VALUE_DIGEST`, visibly WIDE in the repor
 not arbitrary globs; exact paths remain the default. It still cannot cover a different value or rule.
 
 An entry that covers no finding is printed as UNUSED (including an entry shadowed by an earlier one). Keep the
-ALLOWED list in the report: each file-specific decision shows its reason, or "not recorded" if absent. Generated
+ALLOWED list in the report: each file-specific decision reached by the scan shows its reason, or "not recorded" if absent. Generated
 date/reason comments immediately before an entry supply the reason; arbitrary comments are still scanned but are
 not inferred to be reasons. Keys and e-mail addresses in displayed/JSON reasons are masked. Settling is a reviewable
 publication decision, not evidence that a credential is safe.
@@ -123,7 +127,7 @@ version number is not an e-mail address; each one is a NOTE record in `--json`, 
 
 Repeats (0.1.8). Identical matched values under the same rule in one file/location print as one RED decision;
 another file prints separately. ALLOWED groups only repeats of the same file/value and matching approval and
-shows each decision's reason; NOTE retains earlier grouping. `--json` lists recorded occurrences (subject to
+shows each reported decision's reason; NOTE retains earlier grouping. `--json` lists recorded occurrences (subject to
 ordinary binary listing limits) and includes `settle_entry`, `real_if` and masked `allow_reason` on ALLOWED records.
 A forward-slash Windows path is reported under R05
 only. A legacy regex allowing R05 still exposes R04 as before, so that regex needs both IDs (`R04,R05::…`). A new

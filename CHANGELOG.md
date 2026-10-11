@@ -26,10 +26,13 @@
   JSON lists recorded occurrences/counts and adds the generated entry and decision guidance.
 - Scan non-entry content of every loaded allow file, including external files and post-append reasons.
   Retain dated reasons as metadata without changing matching; mask key/e-mail reasons in text and JSON.
-  Display every file-specific ALLOWED decision with its reason, or "not recorded" when absent.
-- Retain every distinct approved binary decision and its reason in ordinary and settlement scans.
-  Beyond the 20-record listing budget per rule, count repeats on retained ALLOWED records; optional JSON
-  `occurrences` defaults to one, and report totals include it. NOTE keeps its 20-record binary cap.
+  Display each file-specific ALLOWED decision reached by the scan with its reason, or "not recorded" when absent.
+- A settling pass lists every distinct approved binary decision and its reason in the report and JSON, even if RED remains.
+  An ordinary run stops that rule's scan of that file at its first unapproved RED, which stays visible, so it lists only
+  approved decisions reached before that RED; if the file has no RED for that rule, it lists them all.
+- Beyond the binary listing budget of 20 per rule, repeats reached by the scan count on retained ALLOWED records;
+  JSON's optional `occurrences` gives that count (absent means 1), and each printed decision totals it.
+  NOTE keeps its 20-record binary cap.
 - Clarify copy-after-label instructions, partial-settlement exit codes, directory/history scope,
   detector limits and prerequisites. Construct self-test fixtures from pieces at runtime.
 - Self-tests: 312/312, including the original 239 cases; settling regressions and retained feature-off evidence accompany

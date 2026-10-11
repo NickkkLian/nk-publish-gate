@@ -47,7 +47,7 @@ report says so on its `config:` line after the self-test banner — your own ide
    is checked, together with added/modified blobs, not every unchanged blob in every commit.
 2. Read the four lists in order: **RED** (fix, or settle an intentional value after the person approves it;
    see the settling procedure below and `references/config-guide.md`),
-   **ALLOWED** (each file-specific decision and its reason is printed; missing reasons say "not recorded"), **NOTE** (images, big
+   **ALLOWED** (each file-specific decision reached by the scan is printed with its reason; missing reasons say "not recorded"), **NOTE** (images, big
    files, AI tool names inside archives, home paths with a stand-in user, package-and-version counts, stand-in e-mail addresses, `+1` numbers in area code 555: a human looks), **UNSCANNED** (reported unreadable files or archive members
    skipped because of read errors or depth/size limits — open them by hand or remove them). Malformed archives
    that cannot be opened as ZIP fall back to ordinary text/bytes and are not necessarily listed as UNSCANNED.
@@ -81,18 +81,22 @@ python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --approve 'ENTRY_FROM_
 For a person at a terminal, `python3 ${CLAUDE_SKILL_DIR}/scripts/publish_gate.py <dir> --settle` walks the findings
 once: yes/no for each, and a reason for each yes. A no stays RED. EOF or an invalid selection writes nothing.
 The terminal pass and named-approval pass enumerate recognized RED binary matches under the implemented rules
-for this review. Ordinary scans stop listing after the first unapproved RED per binary rule. In both modes,
-every distinct ALLOWED decision and reason is retained in the report and JSON. Beyond the binary listing budget
-of 20 per rule, repeats of an already retained ALLOWED decision are counted on a retained record instead of
-creating more records; JSON's optional `occurrences` gives that count (absent means 1). NOTE retains its cap of
-20 binary records per rule. JSON contains recorded occurrences/counts, not every possible byte match.
+for this review.
+
+A settling pass lists every distinct approved binary decision and its reason in the report and JSON, even if RED remains.
+An ordinary run stops that rule's scan of that file at its first unapproved RED, which stays visible, so it lists only
+approved decisions reached before that RED; if the file has no RED for that rule, it lists them all.
+
+Beyond the binary listing budget of 20 per rule, repeats reached by the scan count on retained ALLOWED records;
+JSON's optional `occurrences` gives that count (absent means 1), and each printed decision totals it.
+NOTE keeps its 20-record binary cap. JSON contains recorded occurrences/counts, not every possible byte match.
 Successful partial settlement exits 1 if any RED remains; a pass with no RED exits 0. Invalid input exits 2.
 
 Both modes append dated decisions to `<dir>/.publish-gate-allow`; they preserve existing bytes. This default file
 is read on later runs, with its path and entry count printed. `--ignore-default-allow` skips its decisions.
 `--allow-file F` reads an additional file and chooses it as the append destination; settling may create it.
 Non-entry content of every loaded allow file is scanned, wherever it sits, and scanned again after an append.
-Reasons are stored as dated comments and shown with each ALLOWED decision (keys/e-mails masked); write a public
+Reasons are stored as dated comments and shown with each ALLOWED decision reached by the scan (keys/e-mails masked); write a public
 explanation without pasting private values into it. A file already scanned in the tree is not scanned twice.
 
 Use `--scope-all-files` only when the person explicitly approves that same rule and value in every file; those
@@ -165,7 +169,7 @@ keeps it one ALLOWED finding; no second approval is needed.
 
 **A repeat within a file is one RED decision.** In 0.1.8 identical matched values under the same rule in the same
 file/location print once with their count. The same value in another file prints separately so an approval cannot
-cover an unread file. ALLOWED decisions group repeats only within the same file and matching approval, with their
+cover an unread file. ALLOWED decisions reached by the scan group repeats only within the same file and matching approval, with their
 stored reason; NOTE retains earlier grouping. `--json` lists each recorded occurrence and supplies
 `settle_entry`, `real_if` and, for ALLOWED records, a masked `allow_reason`.
 
