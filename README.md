@@ -8,10 +8,106 @@ An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](htt
 
 It is a picture because this README has to pass the same gate, and two of the red lines quote a home path. The run as text is what the last command under [Try it](#try-it) prints.
 
+That folder is planted. On 20 real public repositories the gate found a real account name in a home path in 6 and an undeclared address that looks like a person's own in 1. It also said RED on 11 more, 10 of them on findings that expose nobody, so expect RED on a first run: see [What RED meant on 20 real repositories](#what-red-meant-on-20-real-repositories) and [Settle a false alarm in one line](#settle-a-false-alarm-in-one-line).
+
 ![nk-publish-gate](https://raw.githubusercontent.com/NickkkLian/nickkk-skills/main/gallery/social/nk-publish-gate.png)
 
 Part of [nickkk-skills](https://github.com/NickkkLian/nickkk-skills) — skills that stop an AI coding agent's
 "done, tested, safe" from being taken on faith.
+
+## What RED meant on 20 real repositories
+
+The gate was run on 20 public skill repositories, cloned on 2026-10-08: the most-starred public repositories under a few GitHub topics for agent skills, with a size limit, chosen by a rule written down before anything was downloaded. The topics, the limit and the list are kept with the trial's notes and are not given here, so that no repository is pointed at. Version 0.1.7 said RED on 18 of them and printed 360 RED lines for 1,011 findings. On 2026-10-10 every distinct value was read and sorted by written rules (the 873 e-mail and phone findings are 259 distinct values, each read once with up to three of its places), by one reader (an AI agent) with no second reader, from the text only: nobody tested whether an address, a number or a key is live, and the working trees were scanned, not the commit history.
+
+What made the 18 RED:
+
+- **6** carry a real account name in a home path.
+- **1** carries an e-mail address that looks like a person's own and that the project declares nowhere.
+- **1** has only addresses the reader could not decide.
+- **10** are RED on findings that expose nobody: invented values, strings that are not addresses or numbers, and contact addresses a project publishes on purpose. 21 of those findings (7 addresses) are at a personal mail provider, 13 in a manifest author field and 8 in a third party's licence line: somebody's own mailbox, published on purpose.
+
+| Rule | RED findings | What the reader took them for |
+|---|---|---|
+| E-mail address | 814 | 397 contact addresses a project declares (375 its own, 22 inside bundled or quoted work), in an author field or a licence line (one address makes up 323; 23 are at a personal mail provider); 339 invented; 52 not addresses (chat ids, package names, the login part of a URL); 11 role addresses of a service; 2 on domains reserved for examples; 8 undecided; 5 places of the undeclared address above |
+| Home path | 67 | 27 with a real account name; 22 with a one-character folder, 11 with an invented persona, 7 with no user folder |
+| Key-shaped string | 66 | none looked real: 40 made up in tests and fixtures, 16 a scanner's own samples, 5 a vendor's documented example, 5 made up in docs or source |
+| Phone number | 59 | none looked real: 24 not phone numbers, 11 in fiction ranges 0.1.7 does not know, 17 fiction by convention only (2 of them toll-free numbers that can be assigned), 7 invented digit patterns |
+| Junk file or folder | 5 | 2 editor folders, a byte-code cache and its `.pyc`, a local settings file |
+
+Of the 27 real home paths, 23 were in Markdown, 2 in a Python test, 1 in JSON and 1 inside a `.pyc`. So in this trial the reading of archives and compiled files, which is what a text search does not do, found one of them.
+
+So expect RED the first time you run this on a healthy repository. Read each line: here 32 of the 1,011 findings named somebody who had not chosen to be named and 8 more might; the rest, as read, exposed nobody. Then settle those, one line each.
+
+## Settle a false alarm in one line
+
+An allow entry settles a finding you have read: `RULE::WHERE::WHAT`. RULE is the id in the finding's brackets. WHERE is a pattern for the file's path (`*` also crosses folders). WHAT is a regular expression that must cover what the gate matched: write it for the whole value, with a dot as `\.` and a bracket as `\(`.
+
+In a clone of this repository (the first line under [Try it](#try-it)), this builds a folder with three false alarms of the commonest kinds in the trial: a made-up customer address on a stock domain, the project's own contact address, and a made-up token in a test.
+
+```bash
+at=@
+mkdir -p shop/docs shop/tests
+echo 'curl -d email=customer42'$at'acme.com https://shop.invalid/orders' > shop/docs/api.md
+echo '{"name": "shop", "author": "Contoso Shop <maintainers'$at'contoso.com>"}' > shop/package.json
+echo 'SLACK_TOKEN = "xoxb-''fake-bot-token"  # made up for this test' > shop/tests/test_notify.py
+python3 scripts/publish_gate.py shop | sed 's/   | .*//'
+```
+
+```text
+publish_gate selftest · 2026-10-10 19:20:30 · 239/239 passed
+config: none (built-in rules only — your own identifiers are NOT being checked)
+scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
+RED (3):
+  [R10 non-example e-mail] package.json:1  m***@contoso.com
+  [R10 non-example e-mail] docs/api.md:1  c***@acme.com
+  [R07 secret shape] tests/test_notify.py:1  xoxb-f…(19 chars)
+ALLOWED (0):
+NOTE (0):
+UNSCANNED (0): none
+verdict: 🔴 RED — do not publish
+```
+
+One line for each, then the same scan again:
+
+```bash
+cat > shop.allow <<'END'
+# the made-up customer address in the API notes
+R10::docs/api.md::customer42@acme\.com
+# the project's own contact address, in its manifest
+R10::package.json::maintainers@contoso\.com
+# the made-up token in the notifier test ([-] keeps this line from being key-shaped itself)
+R07::tests/test_notify.py::xoxb[-]fake-bot-token
+END
+python3 scripts/publish_gate.py shop --allow-file shop.allow | sed 's/   | .*   allowed by /   allowed by /'
+```
+
+```text
+publish_gate selftest · 2026-10-10 19:20:30 · 239/239 passed
+config: none (built-in rules only — your own identifiers are NOT being checked)
+scanned shop: 3 files · 3 text · 0 binary · 0 archive member names · 0 PDF streams
+RED (0):
+ALLOWED (3):
+  [R10 non-example e-mail] package.json:1  m***@contoso.com   allowed by R10::package.json::maintainers@contoso\.com
+  [R10 non-example e-mail] docs/api.md:1  c***@acme.com   allowed by R10::docs/api.md::customer42@acme\.com
+  [R07 secret shape] tests/test_notify.py:1  xoxb-f…(19 chars)   allowed by R07::tests/test_notify.py::xoxb[-]fake-bot-token
+NOTE (0):
+UNSCANNED (0): none
+verdict: 🟢 GREEN — NOTE items still need a human look
+```
+
+Both outputs are copied from a terminal (0.1.7, 2026-10-10). Without the `sed`, the first run exits 1 and the second 0. The `sed` drops the quoted source line from each finding and `$at` stands for the @ sign, only because this README has to pass the same gate and would otherwise hold both addresses in full; on your own folder leave the `sed` off. The same entries work as `--allow 'ENTRY'` flags. An allowed finding is not hidden: it is printed under ALLOWED with the entry that let it through.
+
+**Do not copy an entry from a printed home path.** For a home path the gate prints only the start that its rule matched: the users folder on macOS, the home folder and one letter on Linux. An entry with that as its pattern allows every home path that starts the same way in the files it covers, a real account's too. Write the pattern through the user folder and the slash that closes it, and name the one file: `R04::docs/howto.md::[/]home/alice/` (the first slash is written `[/]` so that this line is not a home path itself). Without the closing slash the entry also allows a longer name that starts with `alice`.
+
+What else is awkward about this in 0.1.7:
+
+- A comment needs its own line and starts in the first column. Text after an entry on the same line becomes part of its pattern: the entry then matches nothing, and no warning is printed. A bracket left unescaped does the same.
+- An allow file inside the folder is scanned like any other file. An address written there without the backslash, or a token written out in full, is a new RED line, which is why the token above has `[-]` in it. Or keep the file outside the folder.
+- A key-shaped value is printed cut short (`xoxb-f…(19 chars)`), so open the file to see what the pattern has to cover.
+- There is no default allow file: `--allow-file` goes on every run. A path that does not exist ends in a Python traceback with exit code 1, the code a RED verdict also uses.
+- An entry is as wide as you write it. `R10::*::[A-Za-z0-9._%+-]+@acme\.com` settles every address at that stock domain in any file, a real mailbox there too; `R07::tests/*::.+` allows every key-shaped string under `tests/`, a real one too, and in the trial 2 of the 27 real home paths were in test code. An entry with no rule id (`WHERE::WHAT`) is read as well and applies to every rule. The three entries above each cover one value in one file.
+
+Quieter rules were tried and dropped. On 2026-10-10 three builds were measured on the same 20: they turned 6, 8 and 5 of them green (0.1.7: 2), printed 117, 110 and 187 RED lines, and kept every finding that names somebody. But against new values written to test them, each let through some that must stay RED: the first 6 of 7, the second 11 of 55, the third 9 of 48 new ones and none of the earlier 55. The first two let through a complete private key written as quoted lines; the third did not. So the rules stay strict, and a false alarm is settled by hand.
 
 ## Try it
 
@@ -40,17 +136,17 @@ verdict: 🔴 RED — do not publish
 
 ## What it does
 
-- Finds a home-directory path, a personal mailbox or one of your own names wherever it sits: in a text file inside a zip inside an xlsx, in a PDF stream, in a `.pyc`, in a commit's author line. None of these is a credential, so a secret scanner has no rule for them.
+- Finds a home-directory path, an e-mail address or one of your own names wherever it sits: in a text file inside a zip inside an xlsx, in a PDF stream, in a `.pyc`, in a commit's author line. None of these is a credential, so a secret scanner has no rule for them. It cannot tell a person's own address from an invented one: every address that is not an example, a no-reply or a stand-in is RED until you allow it.
 - Opens archives (zip/xlsx/docx/pptx) three levels deep, member names included; inflates PDF streams; scans binaries as bytes; looks at every file regardless of extension.
 - `--git-range` scans every commit's author, message and blobs — a line deleted last week is still in the history you publish.
 - Your own identifiers live in a config outside every repo; built-in rules work without it.
 - For secrets it is a backstop, not a scanner: fourteen key formats and `api_key = <long value>`-style assignments. Run gitleaks or trufflehog as well; what this gate adds is everything on this list that is not a credential.
-- Allow entries name the rule they are for and must cover the matched text itself (`R10::README.md::you@example\.org`).
+- A finding you have read and accept is settled with one allow entry (`--allow`, or a line in an `--allow-file`). The entry names the rule and the file and must cover the matched text itself (`R10::package.json::maintainers@contoso\.com`); the finding is still printed, under ALLOWED.
 - Self-test with one sample per rule and per key format, and a clean control.
 - A home path is a NOTE, not RED, when its whole user folder name is a stand-in word (`user`, `you`, `dev`, `node` and four more), three dots or a name in angle brackets. Any other folder name is RED, invented ones such as `jane` included. A real account named exactly like a stand-in is a NOTE too: put your own login in the config.
 - Also NOTEs: a package name with an `@` and a version number (each one is in `--json`, one printed line per file), an e-mail address whose two sides are both stand-ins from two short lists, and a phone number written with `+1` and area code 555, which NANPA lists as not assignable. An `@` followed by four numbers stays RED. A Windows path with forward slashes is one finding, not two.
 - The same address, the same phone digits or the same user folder is printed as one RED line with its count; `--json` lists every place.
-- On 20 public skill repositories (2026-10-08) this took the RED lines printed from 5,560 to 360, and for the median repository from 23 to 7.5. Every 0.1.6 finding is still in `--json`, as RED or as a NOTE. The 28 home-path findings with a real account name and the 66 key-shaped strings picked out by hand in the first run are all still RED (the 28 print as 27, because a Windows path that two rules both reported is now counted once); e-mail addresses and phone numbers were not part of that hand-picked set.
+- On 20 public skill repositories (2026-10-08) this took the RED lines printed from 5,560 to 360, and for the median repository from 23 to 7.5. Every 0.1.6 finding is still in `--json`, as RED or as a NOTE. The 28 home-path findings with a real account name and the 66 key-shaped strings picked out by hand in the first run are all still RED (the 28 print as 27, because a Windows path that two rules both reported is now counted once); e-mail addresses and phone numbers were not part of that hand-picked set. What the 360 lines turned out to be, read one by one, is under "What RED meant on 20 real repositories".
 - Phone checks include leading-zero national forms, phone-word bare 10/11-digit runs, and Chinese national mobiles (11 digits starting 13–19, including matching IDs). Bare ten-digit runs without a phone word stay clean. North American numbers followed by a full stop are caught; documented North American, UK and Australian fiction shapes are exempt, including a test number followed by a column delimiter and a valid ISO date/time. Extra fields and split real numbers stay RED.
 
 The full procedure, the boundaries and where the rules came from are in [SKILL.md](SKILL.md).
@@ -168,6 +264,7 @@ This shows those lines are covered. It does not show that nothing else can fail.
 
 ## Limits
 
+- It cannot tell an invented value from a real one, or a contact address a project means to publish from a private one. On 20 public repositories, 10 of the 18 RED verdicts rested on findings that expose nobody: see [What RED meant on 20 real repositories](#what-red-meant-on-20-real-repositories).
 - Text drawn as glyph outlines in a PDF, and anything inside a screenshot, are invisible to it (NOTE lists the images so you look). Encrypted archives are listed as UNSCANNED.
 - It is not a secret scanner. The secret rule knows fourteen key formats (Anthropic, OpenAI, GitHub, AWS, Slack, Google, Stripe live keys, npm, GitLab, SendGrid, Twilio, Hugging Face, signed JWTs, PEM private keys); any other format passes unless it sits behind `api_key =`, `token =`, `secret =` or `password =`. Use gitleaks or trufflehog for secrets; gitleaks was not run next to this gate, so no head-to-head numbers are claimed.
 - Rules are regular expressions: a name spelled differently passes.
