@@ -1,7 +1,12 @@
 # The history decision — before you make a repository public
 
-Making a repository public publishes every commit that is reachable, not the current tree. Run
-`publish_gate.py <clone> --git-range HEAD` first, then pick one row:
+Making a repository public exposes committed objects reachable from the refs you share; a folder package can
+instead include untracked files and omit history. The default directory scan excludes `.git` and checks no
+history. With Python 3.9+ and Git on PATH, run `publish_gate.py <clone> --git-range HEAD` to scan the directory
+and commits reachable from HEAD. Include other branches/tags you intend to publish as well. The history scan
+checks selected commits' author/committer metadata, messages and added/modified blobs, not every unchanged blob.
+GREEN means no unapproved RED match under these rules in scanned material, not a complete inspection or proof
+that history is safe. Use the boundaries in `config-guide.md`, then pick one row:
 
 | Situation | Do this |
 |---|---|

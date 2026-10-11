@@ -24,9 +24,12 @@
   A digest approval for R05 keeps a forward-slash Windows path a single finding.
 - Group RED decisions by rule, exact file/location and matched value; another file needs another decision.
   JSON still lists every occurrence and adds the generated entry and decision guidance.
-- Preserve hashes in legacy filename patterns and regex character classes while refusing genuine inline comments.
-  Invalid terminal answers abort without appending earlier approvals.
-- Self-tests: 305/305, including the original 239 cases; settling regressions and retained feature-off evidence accompany
+- Scan non-entry content of every loaded allow file, including external files and post-append reasons.
+  Retain dated reasons as metadata without changing matching; mask key/e-mail reasons in text and JSON.
+  Display every file-specific ALLOWED decision with its reason, or "not recorded" when absent.
+- Clarify copy-after-label instructions, partial-settlement exit codes, directory/history scope,
+  detector limits and prerequisites. Construct self-test fixtures from pieces at runtime.
+- Self-tests: 310/310, including the original 239 cases; settling regressions and retained feature-off evidence accompany
   the handback. Historical version numbers below refer to the releases measured at the time.
 
 ## 0.1.7 — 2026-10-09

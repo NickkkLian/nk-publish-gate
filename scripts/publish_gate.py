@@ -8,7 +8,7 @@
 
 0.1.8 settling: <dir> --settle (terminal yes/no plus a reason for each yes), or
 <dir> --approve 'ENTRY' [--approve 'ENTRY' ...] --reason 'why these are intentional'.
-Copy each ENTRY from a RED finding's settle line; never approve an actual credential.
+Copy everything after settle: into one quoted ENTRY argument; never approve an actual credential.
 Entries are appended with dates/reasons to <dir>/.publish-gate-allow, or --allow-file F.
 The default file is read automatically; --ignore-default-allow skips it. Existing regex
 entries keep their matching behavior. Inline comments are refused; use a separate comment line.
@@ -16,7 +16,8 @@ SHA256 RULE FILE_DIGEST VALUE_DIGEST binds one rule, exact file/location and com
 independent of line number. For home paths the value is the whole account folder path.
 --scope-all-files explicitly broadens each named approval to the same rule/value in all
 files (SHA256-WIDE); it never approves all values. Wide and unused entries are reported.
-Settlement passes enumerate all binary matches so latent findings can be reviewed once;
+All loaded allow files' non-entry content is scanned, even outside the root and after append.
+Settlement passes enumerate recognized RED binary matches under these rules for one review;
 ordinary scans retain their existing first-RED-per-binary-rule behavior.
 
 Exit: 0 green (no RED; NOTE may exist) · 1 RED · 2 selftest failed / usage error. The selftest runs first,
@@ -25,7 +26,8 @@ shares scan_tree / scan_git_range with the real run, and aborts everything if it
 Built-in RED rules (no config needed):
   R04 home-directory and mount paths (macOS and Linux home dirs, private tmp, mounted volumes, a home Desktop)   R05 Windows user paths
       (0.1.7: a home path whose whole user folder name is a stand-in, see STANDIN_USERS, is a NOTE; a drive-letter path
-      written with forward slashes is reported once, by R05, unless an allow entry covers the R05 finding)
+      written with forward slashes is reported once, by R05; legacy regex approvals may expose R04,
+      while exact R05 digest approvals preserve the single finding)
   R07 secret shapes (Anthropic/OpenAI/GitHub/AWS/Slack/Google/Stripe/npm/GitLab/SendGrid/Twilio/Hugging Face keys, JWTs, PEM headers;
       a short list, not a secret scanner: run gitleaks or trufflehog as well)   R08 key/token/secret/password = <long value with digits> (placeholders excluded)
   R09 international/separated, leading-zero national, phone-word bare and Chinese national phone shapes;
@@ -39,12 +41,16 @@ Config rules (your own identifiers, from --config or $PUBLISH_GATE_CONFIG or ~/.
   U01 identifiers (handles, private mailbox names)  U02 legal names  U03 personal URLs  U04 usernames/hostnames  U05 private project names
 NOTE (listed, never red): R04/R05 home paths with a stand-in user · R09 +1 numbers in area code 555 · R10 name@version counts and stand-in addresses · R13 AI tool names inside archives/binaries · R14 non-Latin scripts (only with --note-scripts) · R15 file >= 50 MB · R16 images (a machine cannot read a screenshot: look at them)
 Repeats (0.1.8): identical matched values under the same rule in the same file/location are one RED decision with
-their count and first place; another file needs another decision. ALLOWED and NOTE keep their earlier grouping,
-including one name@version NOTE line per file. --json lists every occurrence and supplies settle_entry / real_if.
+their count and first place; another file needs another decision. ALLOWED groups only within the same file and
+matching approval and shows its reason; NOTE keeps earlier grouping. --json lists recorded occurrences,
+subject to ordinary binary listing limits, and supplies settle_entry / real_if / masked allow_reason.
 Archives (PK header: zip/xlsx/docx/pptx/jar) are opened up to 3 levels, member names included; PDF Flate streams are inflated and
-scanned as text; binaries are scanned as bytes; every file is looked at regardless of extension; anything unreadable is listed as UNSCANNED.
---git-range: every commit in the range (e.g. origin/main..HEAD, or HEAD for all history) has its author/committer, message, and every
-added/modified blob scanned with the same rules. Publishing a repo publishes its whole history.
+scanned as text; binaries use byte patterns; directory files are read regardless of extension, excluding .git.
+Archive members over 50 MiB and depth/read failures enter UNSCANNED; malformed ZIPs can fall back to text/bytes.
+--git-range: selected commits (e.g. origin/main..HEAD, or HEAD for its reachable history) have author/committer,
+message and added/modified blobs scanned. The default checks no history. GREEN means no unapproved RED match
+under these rules in scanned material, not complete byte inspection. Source is not executed or reconstructed.
+Python 3.9+ and Git on PATH are prerequisites, including for the self-test run on every scan.
 allow entries: RULES::GLOB::REGEX (or GLOB::REGEX). A hit is downgraded to ALLOWED (still printed) only when its rule is in RULES
 (a comma list such as R10 or U01,U02; the two-field form takes any rule), its relative path matches GLOB, and a match of REGEX
 on the same line covers the matched text itself (in a binary: within 200 bytes on either side). Every match on a line is its own hit.
@@ -251,6 +257,18 @@ def entry_text(entry):
     return (",".join(sorted(rules)) + "::" if rules else "") + glob + "::" + rx.pattern
 
 
+class AllowEntries(list):
+    """Keep dated reason comments with parsed entries without changing their matching form."""
+    def __init__(self):
+        super().__init__()
+        self.reasons = {}
+
+    def extend(self, entries):
+        super().extend(entries)
+        for entry, reason in getattr(entries, "reasons", {}).items():
+            self.reasons.setdefault(entry, reason)
+
+
 def safe_excerpt(text):
     """Mask complete keys and addresses even when they neighbour another finding."""
     text = text.encode("utf-8", "backslashreplace").decode("utf-8")
@@ -290,11 +308,11 @@ REAL_IF = {
 }
 
 
-def settle_groups(rows):
+def settle_groups(rows, approvals=False):
     """One decision per rule, file and exact value, never folded across files."""
     out, at = [], {}
     for row in rows:
-        key = row["settle_entry"]
+        key = (row["settle_entry"], row["allowed_by"]) if approvals else row["settle_entry"]
         if key in at:
             at[key][1] += 1
         else:
@@ -459,7 +477,10 @@ class Result:
         rec["real_if"] = REAL_IF.get(rule, "Real if this is one of the configured personal identifiers that should stay private.")
         by = self.allowed_by(rule, where, text, span, identity=identity, track=True)
         if by:
-            rec["allowed_by"] = by; self.allowed.append(rec); return "allowed"
+            rec["allowed_by"] = by
+            reason = getattr(self.allow, "reasons", {}).get(by)
+            rec["allow_reason"] = safe_excerpt(reason) if reason else "not recorded"
+            self.allowed.append(rec); return "allowed"
         self.red.append(rec); return "red"
 
 
@@ -671,8 +692,34 @@ def scan_blob(rules, res, rel, data):
 def scan_tree(rules, root, allow, big_note=BIG_NOTE, big_red=BIG_RED, allow_paths=(), review_all_binary=False):
     res, root = Result(allow), os.path.abspath(root)
     res.review_all_binary = review_all_binary
-    active = {os.path.abspath(path) for path in allow_paths}
-    active.add(os.path.join(root, DEFAULT_ALLOW))
+    active = {os.path.realpath(path) for path in allow_paths}
+    active.add(os.path.realpath(os.path.join(root, DEFAULT_ALLOW)))
+    scanned = set()
+
+    def scan_file(p, rel):
+        scanned.add(os.path.realpath(p))
+        res.scope = rel
+        res.n_files += 1
+        f = os.path.basename(p)
+        if JUNK_FILES.search(f):
+            res.hit("R12", "junk file on the publish surface", rel, 0, f, f)
+        scan_text(rules, res, rel + " (file name)", rel, inside=False)
+        try:
+            size = os.path.getsize(p)
+            with open(p, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            res.unscanned.append(f"{rel} (unreadable: {type(e).__name__})"); return
+        if size >= big_red:
+            res.hit("R15", "file >= 100 MB (GitHub rejects)", rel, 0, f"{size} bytes", f"{size >> 20} MB", identity=f"{size} bytes")
+        elif size >= big_note:
+            res.hit("R15", "file >= 50 MB", rel, 0, f"{size} bytes", f"{size >> 20} MB", tier="NOTE")
+        if IMAGE_EXT.search(f):
+            res.hit("R16", "image (look at it yourself)", rel, 0, f"{size} bytes", f"{size >> 10} KB", tier="NOTE")
+        if os.path.realpath(p) in active:
+            data = scan_allow_content(data)
+        scan_blob(rules, res, rel, data)
+
     for dp, dns, fns in os.walk(root):
         for d in list(dns):
             if d in JUNK_DIRS:
@@ -682,26 +729,10 @@ def scan_tree(rules, root, allow, big_note=BIG_NOTE, big_red=BIG_RED, allow_path
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
         for f in sorted(fns):
             p, rel = os.path.join(dp, f), os.path.relpath(os.path.join(dp, f), root)
-            res.scope = rel
-            res.n_files += 1
-            if JUNK_FILES.search(f):
-                res.hit("R12", "junk file on the publish surface", rel, 0, f, f)
-            scan_text(rules, res, rel + " (file name)", rel, inside=False)
-            try:
-                size = os.path.getsize(p)
-                with open(p, "rb") as fh:
-                    data = fh.read()
-            except OSError as e:
-                res.unscanned.append(f"{rel} (unreadable: {type(e).__name__})"); continue
-            if size >= big_red:
-                res.hit("R15", "file >= 100 MB (GitHub rejects)", rel, 0, f"{size} bytes", f"{size >> 20} MB", identity=f"{size} bytes")
-            elif size >= big_note:
-                res.hit("R15", "file >= 50 MB", rel, 0, f"{size} bytes", f"{size >> 20} MB", tier="NOTE")
-            if IMAGE_EXT.search(f):
-                res.hit("R16", "image (look at it yourself)", rel, 0, f"{size} bytes", f"{size >> 10} KB", tier="NOTE")
-            if os.path.abspath(p) in active:
-                data = scan_allow_content(data)
-            scan_blob(rules, res, rel, data)
+            scan_file(p, rel)
+    for p in dict.fromkeys(os.path.abspath(path) for path in allow_paths):
+        if os.path.realpath(p) not in scanned and os.path.exists(p):
+            scan_file(p, os.path.relpath(p, root))
     res.scope = None
     return res
 
@@ -795,13 +826,25 @@ def has_inline_allow_comment(regex):
 def parse_allow(items, path):
     """RULES::GLOB::REGEX (RULES a comma list of rule IDs) or GLOB::REGEX (any rule). An entry whose first field is a
     list of rule IDs is read as the three-field form; REGEX may itself contain '::'."""
-    out, raw = [], list(items or [])
+    out, raw = AllowEntries(), [(item, None) for item in items or []]
     if path:
         with open(path, encoding="utf-8") as fh:
-            raw += [l.strip() for l in fh if l.strip() and not l.lstrip().startswith("#")]
-    for it in raw:
+            reason = None
+            for line in fh:
+                text = line.strip()
+                if text.startswith("#"):
+                    dated = re.fullmatch(r"# \d{4}-\d{2}-\d{2} — (.+)", text)
+                    reason = dated[1] if dated else None
+                elif text:
+                    raw.append((text, reason)); reason = None
+                else:
+                    reason = None
+    for it, reason in raw:
         if it.startswith(("SHA256 ", "SHA256-WIDE ")) and "::" not in it:
-            out.append(parse_digest(it)); continue
+            entry = parse_digest(it)
+            out.append(entry)
+            out.reasons.setdefault(entry_text(entry), reason)
+            continue
         head, sep, rest = it.partition("::")
         if RULE_LIST.fullmatch(head) and "::" in rest:
             glob, _, rx = rest.partition("::")
@@ -816,7 +859,9 @@ def parse_allow(items, path):
             compiled = re.compile(rx)
         except re.error as e:
             raise ValueError(f"invalid allow regex: {e}") from None
-        out.append((rules_ok, glob, compiled))
+        entry = (rules_ok, glob, compiled)
+        out.append(entry)
+        out.reasons.setdefault(entry_text(entry), reason)
     return out
 
 
@@ -892,6 +937,8 @@ def print_finding(row, count=1, files=1, settlement=False):
     print(f"  [{row['rule']} {row['label']}] {safe_excerpt(row['where'])}:{row['line']}  {row['match']}   | {row['excerpt'][:120]}{by}{repeated}")
     if "source" in row:
         print(f"    source file: {row['source']}")
+    if "allowed_by" in row:
+        print(f"    reason: {safe_excerpt(row.get('allow_reason', 'not recorded'))}")
     if settlement:
         print(f"    {row['real_if']}")
         print(f"    settle: {row['settle_entry']}")
@@ -899,7 +946,7 @@ def print_finding(row, count=1, files=1, settlement=False):
 
 def print_report(res):
     for title, rows in (("RED", res.red), ("ALLOWED", res.allowed), ("NOTE", res.note)):
-        shown = settle_groups(rows) if title == "RED" else printed(rows)
+        shown = printed(rows) if title == "NOTE" else settle_groups(rows, approvals=title == "ALLOWED")
         repeats = "" if len(shown) == len(rows) else f", printed as {_n(len(shown), 'line')}: repeats folded, --json lists every place"
         print(f"{title} ({len(rows)}{repeats}):")
         for row, count, files in shown:
@@ -1146,6 +1193,52 @@ def settling_selftest(check):
     jr = Result(ja); jr.hit("R12", "cache/env directory", "__pycache__/", 0, "__pycache__", "__pycache__")
     check(not jr.red, "0.1.8 directory findings can be settled too")
     with tempfile.TemporaryDirectory() as d:
+        outside_root = os.path.join(d, "outside-root")
+        os.mkdir(outside_root)
+        outside_allow = os.path.join(d, "outside.allow")
+        with open(outside_allow, "w") as fh:
+            fh.write("# " + key + "\n")
+        outside_entries, outside_paths, _ = load_allow_sources(outside_root, explicit=outside_allow)
+        outside_result = scan_tree(rules, outside_root, outside_entries, allow_paths=outside_paths)
+        check(len(outside_result.red) == 1 and outside_result.red[0]["rule"] == "R07"
+              and outside_result.red[0]["where"] == "../outside.allow",
+              "0.1.8 every loaded outside allow file has its comments scanned")
+        with open(os.path.join(outside_root, "sample.md"), "w") as fh:
+            fh.write(key)
+        with open(outside_allow, "w") as fh:
+            fh.write("# public decisions\n")
+        before = scan_tree(rules, outside_root, [], allow_paths=[outside_allow])
+        selected = select_approvals(before, [before.red[0]["settle_entry"]], key2)
+        append_approvals(outside_allow, selected)
+        outside_entries, outside_paths, _ = load_allow_sources(outside_root, explicit=outside_allow)
+        after = scan_tree(rules, outside_root, outside_entries, allow_paths=outside_paths)
+        check(len(after.allowed) == 1 and len(after.red) == 1 and after.red[0]["rule"] == "R07"
+              and after.red[0]["where"] == "../outside.allow" and exit_code(after) == 1,
+              "0.1.8 settling rescans a reason appended to an outside allow file")
+        check(after.allowed and "allow_reason" in after.allowed[0]
+              and key2 not in json.dumps(public(after.allowed))
+              and key2 not in captured(lambda: print_report(after)),
+              "0.1.8 displayed and JSON approval reasons mask secret-shaped values")
+        review_root = os.path.join(d, "review-root")
+        os.mkdir(review_root)
+        for name in ("first.md", "second.md"):
+            with open(os.path.join(review_root, name), "w") as fh:
+                fh.write(mail + "\n" + mail + "\n")
+        unreviewed = scan_tree(rules, review_root, [])
+        review_allow = os.path.join(review_root, DEFAULT_ALLOW)
+        decisions = [(row["settle_entry"], "public fixture in " + row["where"])
+                     for row, _, _ in settle_groups(unreviewed.red)]
+        append_approvals(review_allow, decisions)
+        entries, paths, _ = load_allow_sources(review_root)
+        reviewed = scan_tree(rules, review_root, entries, allow_paths=paths)
+        report = captured(lambda: print_report(reviewed))
+        check(not reviewed.red and len(reviewed.allowed) == 4 and "first.md:1" in report
+              and "second.md:1" in report and "reason: public fixture in first.md" in report
+              and "reason: public fixture in second.md" in report,
+              "0.1.8 each file-specific ALLOWED decision is visible with its stored reason")
+        unreasoned = hits(mail, allow=parse_allow([hits(mail).red[0]["settle_entry"]], None))
+        check("reason: not recorded" in captured(lambda: print_report(unreasoned)),
+              "0.1.8 an approval without a reason is shown honestly as not recorded")
         alias_root = os.path.join(d, "aliases")
         os.mkdir(alias_root)
         with open(os.path.join(alias_root, "container.zip"), "wb") as fh:
@@ -1673,6 +1766,8 @@ def main():
                 if destination not in paths:
                     paths.append(destination)
                 allow.extend(parse_allow([entry for entry, _ in choices], None))
+                for entry, reason in choices:
+                    allow.reasons[entry] = reason
             print(f"settling: appended {len(choices)} entries to {destination}")
             res = scan(allow, paths)
             print_report(res)
