@@ -1,3 +1,4 @@
+> Archived 2026-10-17: a plain prompt to a plain agent does this as well (fair test, 3 runs each). Kept for reference; no further updates.
 # nk-publish-gate
 
 An agent skill for [Claude Code](https://code.claude.com) and [OpenAI Codex](https://developers.openai.com/codex). A local privacy check before a directory or selected Git history goes public: finds recognized patterns such as home-directory paths inside xlsx files, usernames in Python bytecode and personal addresses.
